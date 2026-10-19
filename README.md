@@ -1,6 +1,6 @@
 # Saildrone / Yelkenli Katamaran Simülatörü
 
-Canlı demo: https://saildronecatamaransim.streamlit.app/
+Kaynak kod: https://github.com/keeeereeeem/saildrone-2
 
 ```bash
 pip install -r requirements.txt
