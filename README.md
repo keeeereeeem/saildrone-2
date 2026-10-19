@@ -1,5 +1,7 @@
 # Saildrone / Yelkenli Katamaran Simülatörü
 
+Canlı uygulama: https://keeeereeeem-saildrone-2-app-2uzfnl.streamlit.app/
+
 Kaynak kod: https://github.com/keeeereeeem/saildrone-2
 
 ```bash
