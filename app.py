@@ -1,4 +1,5 @@
 import hashlib
+import importlib
 import json
 import os
 
@@ -14,6 +15,11 @@ from matplotlib.patches import Wedge
 
 import navigation as nav
 import saildrone_model as sm
+
+# Streamlit (ve Streamlit Cloud'un git güncellemesi) değişen yerel modülleri her zaman yeniden
+# yüklemez; app.py yeni, modeller eski kalırsa uygulama çöker. Model önce, navigasyon sonra yüklenir.
+sm = importlib.reload(sm)
+nav = importlib.reload(nav)
 
 # --- SAYFA VE ARAYÜZ YAPILANDIRMASI ---
 st.set_page_config(
