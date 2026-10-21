@@ -13,9 +13,11 @@ Bu çalışmada simülatör **tek bir yelken modeline — Kumaş Yelken (Cambere
 | Yelken modeli | Kumaş yelken: 5 bantlı hız poları + trim verimi + dümen sürüklemesi |
 | Serbest seyir dinamiği | Hedef hız → 1. derece ileri (surge) dinamiği → kinematik dönüş + orsaya kaçma → konum |
 | Kuvvet ve moment | Yelken itkisi, yan kuvvet, gövde direnci, dümen kuvveti (N); dümen ve yelken momentleri (N·m), Bölüm 3.1 |
+| Fiziksel parametreler | 13 parametre (m, k_g, c_dd, A_s, a_CE, a_LR, L, A_d, x_d, C_Lα, C_L,max, ρ_hava, ρ_su) arayüzden değiştirilebilir; türetilmiş büyüklükler τ, λ, ω_wh simülasyona girer, Bölüm 3.2 |
 | Hedefe navigasyon | Kerteriz → ölü açı kontrolü → VMG-optimum pruva → kontra (tack/gybe) kararı → auto-trim yelken açısı → ters-kinematik dümen açısı |
+| Navigasyon hesap tablosu | 17 adımın formülleri ve seçilen andaki değerleri arayüzde; simülasyonla birebir aynı, Bölüm 4.3 |
 | Rota | Başlangıç → istenen sayıda ara durak → hedef (çokgen, daire, yay rotaları) |
-| Birim testleri | **102 / 102 geçti** (`pytest`: model 49 + navigasyon 53) |
+| Birim testleri | **124 / 124 geçti** (`pytest`: model 59 + navigasyon 65) |
 | Senaryo matrisi | **24 / 24 hedefe ulaşıldı** (4 rüzgar hızı × 6 başlangıç–hedef çifti) |
 | 360° erişilebilirlik | **48 / 48 hedefe ulaşıldı** (1 km yarıçapta 15°'de bir hedef, 3 ve 8 m/s) |
 | Ara duraklı rota | Kare rota (4 bacak, 8 m/s) 406 s'de tamamlandı; 4 tack, 3 gybe |
@@ -80,17 +82,21 @@ Fazla açık dalın ölçeği (30°) fazla kasılı dalınkinden (25°) büyükt
 
 Açılan dümen palası suya karşı direnç oluşturur ve hızı düşürür:
 
-$$\kappa(\delta_r) = 1 - 0.22\left(\frac{\lvert\delta_r\rvert}{35°}\right)^2, \qquad \kappa(0) = 1,\ \ \kappa(\pm35°) = 0.78$$
+$$\kappa(\delta_r) = 1 - c_{dd}\left(\frac{\lvert\delta_r\rvert}{35°}\right)^2, \qquad c_{dd} = 0.22:\ \ \kappa(0) = 1,\ \ \kappa(\pm35°) = 0.78$$
+
+$c_{dd}$ dümen sürükleme katsayısıdır (varsayılan 0.22, arayüzden değiştirilebilir; Bölüm 3.2).
 
 ### Adım 5 — Aerodinamik kuvvetin gövdeye iletimi: hız
 
 Yelkenin ürettiği itki ile gövdenin su direnci dengelendiğinde tekne bir **kararlı-durum (hedef) hızına** ulaşır. Kumaş yelken modelinde bu denge hızı polar, trim ve dümen çarpanlarının çarpımıdır:
 
-$$V^* = U\cdot\rho(\theta)\cdot\eta(\delta_s)\cdot\kappa(\delta_r)$$
+$$V^* = \lambda\cdot U\cdot\rho(\theta)\cdot\eta(\delta_s)\cdot\kappa(\delta_r)$$
 
-Tekne bu hıza anında değil, kütlesi nedeniyle gecikmeyle ulaşır. İleri yön (surge) hareket denklemi $m\,\dot v = F_{itki} - F_{direnç}$, denge hızı etrafında doğrusallaştırılınca birinci derece bir sisteme dönüşür:
+$\lambda$, yelken alanı ve gövde direncinden gelen **hız ölçeğidir**; polar varsayılan tekne için ölçüldüğünden varsayılan teknede $\lambda = 1$'dir (Bölüm 3.2).
 
-$$\dot v = \frac{V^* - v}{\tau}, \qquad \tau = 3\ \text{s}$$
+Tekne bu hıza anında değil, kütlesi nedeniyle gecikmeyle ulaşır. İleri yön (surge) hareket denklemi $m\,\dot v = F_{itki} - F_{direnç}$, gövde direnci $R = k_g\,v$ ile birinci derece bir sisteme dönüşür:
+
+$$\dot v = \frac{V^* - v}{\tau}, \qquad \tau = \frac{m}{k_g} = \frac{250\ \text{kg}}{83.33\ \text{N·s/m}} = 3\ \text{s}$$
 
 Yani gövdeye iletilen **net ileri kuvvet** $F_{net} = m\,(V^*-v)/\tau$'dur: tekne hedef hızından yavaşsa yelken onu hızlandırır, hızlıysa (ör. ölü açıya girdiğinde $V^*=0$) su direnci yavaşlatır. Ayrık zamanda tam çözüm kullanılır (her $\Delta t$ için kararlı):
 
@@ -106,6 +112,7 @@ $$\dot\psi\ [°/\text{s}] = \underbrace{\frac{v}{L}\,\sin\delta_r\cdot\frac{180}
 * Sabit dümende dönüş yarıçapı $R = L/\sin\delta_r$ (tam dümende $R = 8.0$ m).
 * Orsaya kaçma rüzgar altı bordasına bağlıdır: iskele kontrada ($s=+1$) pruva azalır, sancak kontrada ($s=-1$) artar — her iki durumda da tekne rüzgara döner.
 * Dümen ve yelken momentlerinin N·m cinsinden hesabı Bölüm 3.1'dedir.
+* $L$ ve $\omega_{wh}$ varsayılan tekneye aittir; $L$ arayüzden doğrudan, $\omega_{wh}$ ise yelken–dümen geometrisinden türetilerek değişir (Bölüm 3.2).
 
 ### Adım 7 — Konum
 
@@ -128,25 +135,29 @@ Her adımda sırasıyla: (1) $\theta_k$, $\rho$, $\delta_{opt}$; (2) $\eta$, $\k
 
 ### 3.1 Açık kuvvet ve moment hesabı (N, N·m)
 
-Yukarıdaki adımlar hızları ve açıları verir. Aynı denklemler, tekneye etkiyen **kuvvetler (N)** ve **momentler (N·m)** cinsinden de yazılabilir. Bunun için aşağıdaki fiziksel parametreler kullanılır (≈ 5 m'lik bir yelkenli katamaran için tipik değerler; kodda `saildrone_model.PHYS`):
+Yukarıdaki adımlar hızları ve açıları verir. Aynı denklemler, tekneye etkiyen **kuvvetler (N)** ve **momentler (N·m)** cinsinden de yazılabilir. Bunun için aşağıdaki fiziksel parametreler kullanılır (≈ 5 m'lik bir yelkenli katamaran için tipik değerler; kodda `saildrone_model.Physics`, arayüzde sol kenar çubuğundan değiştirilebilir — Bölüm 3.2). Tablodaki değerler **varsayılan teknedir**; bu bölümdeki sayısal sonuçlar bu değerlerle hesaplanmıştır.
 
-| Parametre | Sembol | Değer |
+| Parametre | Sembol | Varsayılan değer |
 |---|---|---|
 | Tekne + ekipman kütlesi | $m$ | 250 kg |
-| Kumaş yelken alanı | $A_y$ | 20 m² |
+| Gövde doğrusal direnç katsayısı | $k_g$ | 83.33 N·s/m |
+| Kumaş yelken alanı | $A_s$ | 20 m² |
+| Efektif gövde boyu (kinematik dönüş) | $L$ | 4.6 m |
 | İki dümen palasının toplam alanı | $A_d$ | 0.16 m² |
 | Dümen kaldırma eğimi (en-boy oranı 2.5) | $C_{L\alpha} = 2\pi\,\frac{AR}{AR+2}$ | 3.49 1/rad, stall: $C_{L,max} = 1.2$ |
 | Dümenin ağırlık merkezine uzaklığı | $x_d$ | 2.1 m |
-| Yelken basınç merkezi ile yanal direnç merkezi arası kaçıklık | $e$ | 0.20 m (tam apazda kalibre) |
+| Ağırlık merkezi – yelken basınç merkezi / yanal direnç merkezi (kıça doğru +) | $a_{CE}$, $a_{LR}$ | 0.20 m / 0 m |
+| Yelken basınç merkezi ile yanal direnç merkezi arası kaçıklık | $e = a_{CE} - a_{LR}$ | 0.20 m (tam apazda kalibre) |
+| Dümen sürükleme katsayısı | $c_{dd}$ | 0.22 |
 | Hava / deniz suyu yoğunluğu | $\rho_a$, $\rho_{su}$ | 1.225 / 1025 kg/m³ |
 
 ![Kuvvet diyagramı](docs/figures/force_diagram.png)
 
 **K1 — İleri yön kuvvet dengesi (Newton'un 2. yasası).** Adım 5'teki hız denklemi, kütleyle çarpılınca bir kuvvet dengesine dönüşür:
 
-$$m\,\dot v = \underbrace{T}_{\text{yelken itkisi}} - \underbrace{D_d}_{\text{dümen sürüklemesi}} - \underbrace{R}_{\text{gövde direnci}}, \qquad T = \frac{m}{\tau}\,U\rho\,\eta, \quad D_d = T\,(1-\kappa), \quad R = \frac{m}{\tau}\,v$$
+$$m\,\dot v = \underbrace{T}_{\text{yelken itkisi}} - \underbrace{D_d}_{\text{dümen sürüklemesi}} - \underbrace{R}_{\text{gövde direnci}}, \qquad T = k_g\,\lambda\,U\rho\,\eta, \quad D_d = T\,(1-\kappa), \quad R = k_g\,v$$
 
-Kararlı hızda $\dot v = 0$, yani $T = D_d + R$ ve $v = V^*$ olur. Gövde direnci hızla doğrusal kabul edilmiştir; $m/\tau = 83.3$ N·s/m.
+Kararlı hızda $\dot v = 0$, yani $T = D_d + R$ ve $v = V^*$ olur. Gövde direnci hızla doğrusal kabul edilmiştir: $k_g = m/\tau = 83.3$ N·s/m. Yelken itkisi yelken alanıyla orantılıdır ($T \propto A_s$); varsayılan teknede $\lambda = 1$.
 
 **K2 — Yelken kuvvetinin bileşenleri.** Kumaş yelkenin ürettiği toplam aerodinamik kuvvet $F_N$, yaklaşık olarak bom kirişine diktir (düz levha yaklaşımı). Bom orta hatla $\delta_s$ açısı yaptığından bu kuvvet iki bileşene ayrılır:
 
@@ -154,7 +165,7 @@ $$T = F_N\sin\delta_s \ \ \text{(ileri itki)}, \qquad F_{yan} = F_N\cos\delta_s 
 
 Bom ne kadar kasılıysa ($\delta_s$ küçük) aynı itki için o kadar büyük yan kuvvet oluşur; orsada yan kuvvet itkinin 3.5 katıdır. Yan kuvveti gövdelerin yanal direnci karşılar (modelde yan kayma yoktur). Kuvvetin büyüklüğünün makul olup olmadığı, görünür rüzgarla tanımlı kuvvet katsayısıyla kontrol edilir:
 
-$$V_A = \sqrt{v^2 + U^2 + 2vU\cos\psi}, \qquad \cos(\text{AWA}) = \frac{v + U\cos\psi}{V_A}, \qquad C_N = \frac{F_N}{\tfrac12\rho_a V_A^2 A_y}$$
+$$V_A = \sqrt{v^2 + U^2 + 2vU\cos\psi}, \qquad \cos(\text{AWA}) = \frac{v + U\cos\psi}{V_A}, \qquad C_N = \frac{F_N}{\tfrac12\rho_a V_A^2 A_s}$$
 
 **K3 — Dümen kuvveti ve dönme momenti.** Akışa $\delta_r$ açısıyla duran dümen palalarının yan kuvveti ve bu kuvvetin ağırlık merkezine göre momenti:
 
@@ -162,7 +173,7 @@ $$Y_d = \tfrac12\,\rho_{su}\,A_d\,C_L(\delta_r)\,v^2, \quad C_L = \operatorname{
 
 Pala sancağa açıldığında ($\delta_r > 0$) su palayı iskeleye iter; kıç iskeleye, pruva sancağa döner ($N_d > 0$).
 
-**K4 — Yelkenin dönme momenti (orsaya kaçma).** Yan kuvvet $F_{yan}$, basınç merkezi yanal direnç merkezinin $e$ kadar gerisinde olduğundan tekneyi rüzgara döndüren bir moment oluşturur:
+**K4 — Yelkenin dönme momenti (orsaya kaçma).** Yan kuvvet $F_{yan}$ yelken basınç merkezinde ($a_{CE}$) etkir; onu dengeleyen gövde yanal direnci yanal direnç merkezinde ($a_{LR}$) etkir. Ağırlık merkezine göre net moment kolu $e = a_{CE} - a_{LR}$'dir; basınç merkezi yanal direnç merkezinin gerisinde ($e > 0$) olduğundan tekneyi rüzgara döndüren bir moment oluşur:
 
 $$N_y = -s\,F_{yan}\,e$$
 
@@ -213,7 +224,7 @@ Dümen momenti, orsaya kaçma momentinden (−148 N·m) çok büyüktür; bu yü
 #### Örnek hesap (adım adım, tam apaz, δs = 46°, δr = +10°, U = 8 m/s)
 
 1. Polar ve verim: $\rho = 1.15$, $\eta = 1$, $\kappa = 1 - 0.22\,(10/35)^2 = 0.982$ → $V^* = 8 \times 1.15 \times 1 \times 0.982 = 9.03$ m/s.
-2. Yelken itkisi: $T = \frac{250}{3} \times 8 \times 1.15 \times 1 = 767$ N.
+2. Yelken itkisi: $T = k_g\,\lambda\,U\rho\,\eta = 83.33 \times 1 \times 8 \times 1.15 \times 1 = 767$ N.
 3. Dümen sürüklemesi: $D_d = 767 \times (1 - 0.982) = 14$ N. Gövde direnci: $R = 83.3 \times 9.03 = 753$ N. Toplam: $T - D_d - R = 0$ (kararlı hız).
 4. Yelken toplam kuvveti: $F_N = 767 / \sin 46° = 1066$ N; yan kuvvet $F_{yan} = 1066 \cos 46° = 740$ N (sancağa, rüzgar altına).
 5. Dümen: $C_L = 3.49 \times 0.1745 = 0.61$; $Y_d = \tfrac12 \times 1025 \times 0.16 \times 0.61 \times 9.03^2 = 4077$ N.
@@ -221,6 +232,64 @@ Dümen momenti, orsaya kaçma momentinden (−148 N·m) çok büyüktür; bu yü
 7. Yelken momenti: $N_y = -(+1) \times 740 \times 0.20 = -148$ N·m (iskeleye, rüzgara doğru).
 8. Net moment: $8562 - 148 = 8414$ N·m → tekne sancağa döner: $\dot\psi = \frac{9.03}{4.6}\sin 10° \cdot \frac{180}{\pi} - 0.35 = 19.2$ °/s, $R = 27.0$ m.
 9. Dönüş için gereken merkezcil kuvvet: $F_c = 250 \times 9.03 \times 0.335 = 757$ N.
+
+### 3.2 Değiştirilebilir fiziksel parametreler ve türetilmiş büyüklükler
+
+Arayüzün sol kenar çubuğundaki **"🔧 Tekne Fiziksel Parametreleri"** paneli, kodda `saildrone_model.Physics` sınıfında tutulan 13 parametreyi kullanıcıya açar. Bir değer değiştirildiğinde sayfa yeniden hesaplanır: serbest seyir simülasyonu, kuvvet–moment tablosu, hedefe navigasyon rotası ve navigasyon hesap tablosu (Bölüm 4.3) **aynı anda** yeni değerlerle güncellenir. "↩️ Varsayılan değerlere dön" düğmesi varsayılan tekneye döner; parametreler varsayılandan farklıyken panelde bir uyarı görünür.
+
+| Grup | Parametre | Sembol | Varsayılan | Arayüz aralığı | Etkilediği büyüklükler |
+|--------|----------------|------|--------|-------|-------------|
+| Kütle ve direnç | Tekne + ekipman kütlesi | $m$ | 250 kg | 20–5000 | $\tau$, $F_c$ |
+| | Gövde doğrusal direnç katsayısı | $k_g$ | 83.33 N·s/m | 5–2000 | $\tau$, $\lambda$, $\omega_{wh}$, $R$ |
+| | Dümen sürükleme katsayısı | $c_{dd}$ | 0.22 | 0–0.9 | $\kappa$, $D_d$ |
+| Yelken | Yelken alanı | $A_s$ | 20 m² | 1–200 | $\lambda$, $T$, $C_N$ |
+| | Ağırlık merkezi – yelken basınç merkezi | $a_{CE}$ | 0.20 m | −3…3 | $e$, $N_y$, $\omega_{wh}$ |
+| | Ağırlık merkezi – yanal direnç merkezi | $a_{LR}$ | 0 m | −3…3 | $e$, $N_y$, $\omega_{wh}$ |
+| Gövde ve dümen | Efektif gövde boyu | $L$ | 4.6 m | 1–30 | $\dot\psi$, $R_{min}$, $v_{min}$, $\omega_{wh}$ |
+| | Dümen alanı (iki pala) | $A_d$ | 0.16 m² | 0.01–5 | $Y_d$, $\omega_{wh}$ |
+| | Ağırlık merkezi – dümen mesafesi | $x_d$ | 2.1 m | 0.1–15 | $N_d$, $\omega_{wh}$ |
+| | Dümen kaldırma eğimi | $C_{L\alpha}$ | 3.49 1/rad | 0.5–6.28 | $C_L$, $\omega_{wh}$ |
+| | Dümen stall sınırı | $C_{L,max}$ | 1.2 | 0.3–2.5 | $C_L$ |
+| Akışkan | Hava yoğunluğu | $\rho_a$ | 1.225 kg/m³ | 0.9–1.5 | $C_N$ |
+| | Su yoğunluğu | $\rho_{su}$ | 1025 kg/m³ | 990–1050 | $Y_d$, $\omega_{wh}$ |
+
+Boyuna mesafeler ağırlık merkezinden ölçülür ve kıça doğru pozitiftir.
+
+**Türetilmiş büyüklükler.** Hız poları $\rho(\theta)$ ve orsaya kaçma hızı $\omega_{wh} = 0.35$ °/s varsayılan tekne için kalibre edilmiştir. Parametreler değişince simülasyon aynı denklemleri şu türetilmiş büyüklüklerle kullanır:
+
+$$\tau = \frac{m}{k_g}, \qquad \lambda = \frac{A_s}{A_{s,ref}}\cdot\frac{k_{g,ref}}{k_g}, \qquad e = a_{CE} - a_{LR}$$
+
+Burada $A_{s,ref} = 20$ m² ve $k_{g,ref} = 83.33$ N·s/m, poların kalibre edildiği varsayılan teknenin değerleridir.
+
+* **Surge zaman sabiti $\tau$:** ileri yön denklemi $m\,\dot v = T - D_d - k_g v$ doğrudan $\dot v = (V^*-v)/\tau$ verir. Kütle kararlı hızı değiştirmez, yalnızca tekneyi daha yavaş hızlandırır ve tack sırasında daha uzun süzülmesini sağlar.
+* **Hız ölçeği $\lambda$:** yelken itkisi alanla orantılıdır, $T = c_T\,A_s\,U\rho\,\eta$ ($c_T = k_{g,ref}/A_{s,ref} = 4.17$ N·s/m³). Kararlı hızda $T\kappa = k_g V^*$ olduğundan $V^* = \lambda\,U\rho\,\eta\,\kappa$ elde edilir. Polar $\rho(\theta)$ böylece $\lambda$ ile ölçeklenir.
+* **Orsaya kaçma hızı $\omega_{wh}$:** K4'teki yelken momenti, $\delta_{eq} = N_y / (x_d\,\tfrac12\rho_{su}A_dC_{L\alpha}v^2)$ kadarlık bir dümen sapmasına eşdeğerdir. Kinematik modelde bu sapma $(v/L)\,\delta_{eq}$ dönüş hızı üretir. Kararlı hızda $F_{yan} = T\cot\delta_s = k_g v\cot\delta_s/\kappa$ olduğundan hız sadeleşir:
+
+$$\omega_{wh} = \frac{e\,k_g\cot\delta_s}{\kappa\,x_d\,\tfrac12\rho_{su}A_dC_{L\alpha}\,L} \;\propto\; \Phi = \frac{e\,k_g}{\rho_{su}\,A_d\,C_{L\alpha}\,x_d\,L}, \qquad \omega_{wh} = 0.35\ °/\text{s}\cdot\frac{\Phi}{\Phi_{ref}}$$
+
+Modelde $\omega_{wh}$ seyir bandından bağımsız tek bir değer olduğu için tam apaz kalibrasyonu ($\delta_s = 46°$; formül 0.33 °/s verir) korunur ve oranla ölçeklenir. Böylece kuvvet modelindeki dengeleyici dümen açısı $\delta_{r,denge}$ ile kontrolcünün düz seyirde tuttuğu $\delta_{r,ss} = \arcsin(\omega_{wh}L/v)$ her parametre setinde uyumlu kalır. $e = 0$ olduğunda orsaya kaçma kalmaz. $e < 0$ olduğunda ise tekne rüzgar altına kaçar (lee helm).
+
+* **Asgari dönüş yarıçapı** $R_{min} = L/\sin 35°$ ve **tack için asgari hız** $v_{min} = \dfrac{1.3\cdot65°\cdot L}{\tau\,\sin35°}$ (Bölüm 4, Adım 5) kenar çubuğunda ayrıca gösterilir.
+
+Varsayılan değerlerde $\tau = 3$ s, $\lambda = 1$ ve $\omega_{wh} = 0.35$ °/s olur. Bu durumda raporun tüm sayısal sonuçları değişmez; simülasyon çıktısının değişiklikten önceki sürümle bit düzeyinde aynı olduğu kontrol edilmiştir.
+
+**Duyarlılık örneği** (U = 8 m/s; her satırda yalnızca bir parametre değiştirilmiştir; S1 = Doğu 1 km tam apaz, S4 = Kuzey 1 km tam rüzgar üstü; varış yarıçapı 10 m):
+
+| Değişiklik | τ (s) | λ | ω_wh (°/s) | V* tam apaz (m/s) | R_min (m) | Tack v_min (m/s) | S1 süre (s) | S4 süre (s) | S4 tack / gybe |
+|------------|----|-----|-----|-----|-----|-----|----|-----|-----|
+| Varsayılan | 3.00 | 1.000 | 0.350 | 9.20 | 8.0 | 3.94 | 108 | 258 | 4 / 0 |
+| m = 500 kg | 6.00 | 1.000 | 0.350 | 9.20 | 8.0 | 1.97 | 108 | 256 | 4 / 0 |
+| A_s = 30 m² | 3.00 | 1.500 | 0.350 | 13.80 | 8.0 | 3.94 | 72 | 196 | 5 / 1 |
+| k_g = 120 N·s/m | 2.08 | 0.694 | 0.504 | 6.39 | 8.0 | 5.68 | 155 | ✘ (7200) | 0 / 425 |
+| L = 3.0 m | 3.00 | 1.000 | 0.537 | 9.20 | 5.2 | 2.57 | 108 | 258 | 4 / 0 |
+| a_CE = 0.40 m (e = 0.40 m) | 3.00 | 1.000 | 0.700 | 9.20 | 8.0 | 3.94 | 108 | 258 | 4 / 0 |
+| A_d = 0.32 m² | 3.00 | 1.000 | 0.175 | 9.20 | 8.0 | 3.94 | 108 | 258 | 4 / 0 |
+| c_dd = 0.50 | 3.00 | 1.000 | 0.350 | 9.20 | 8.0 | 3.94 | 108 | 260 | 4 / 0 |
+
+* **Kütle** kararlı hızı değiştirmez. τ iki katına çıkınca tack eşiği yarıya iner.
+* **Yelken alanı / gövde direnci** hızı λ ile ölçekler. A_s = 30 m²'de tam apaz hızı 13.8 m/s olur; rüzgar üstü hedefe ulaşma süresi 258 s'den 196 s'ye düşer. k_g = 120 N·s/m'de dar apaz hızı (4.72 m/s) tack eşiğinin (5.68 m/s) altına düşer. Tekne kontrayı yalnızca rüzgar altından dönerek değiştirebilir; 10 m varış yarıçapı dönüş çapından küçük kaldığı için de hedef çevresinde döner. Bu durum Bölüm 6.5'tekiyle aynıdır: varış yarıçapı 20 m yapıldığında tekne hedefe 436 s'de, 2 gybe ile ulaşır.
+* **L, A_d, x_d ve e** yalnızca dönüşü ve orsaya kaçmayı etkiler. Navigasyon kontrolcüsü ileri beslemeyi yeni $\omega_{wh}$ ile yaptığından rota süresi değişmez; değişen, düz seyirde tutulan dümen açısıdır (ör. e = 0.40 m'de tam apazda 0.18° yerine 0.35°).
+* **Kuvvet örneği (A_s = 30 m²,** tam apaz, δs = 46°, δr = +10°): T = 1150 N, F_N = 1599 N, F_yan = 1111 N, V* = 13.55 m/s, Y_d = 9173 N, N_d = 19 264 N·m, N_y = −222 N·m, δr,denge = +0.12°.
 
 ---
 
@@ -242,7 +311,9 @@ $\theta(\beta) \le 30°$ ise hedef **ölü açının içindedir**: doğrudan hed
 
 Tekne hedefe doğru değil, **hedefe en hızlı yaklaştıran** pruvaya yönlendirilir. Bir $\psi$ pruvasının hedefe yaklaşma hızı:
 
-$$\text{VMG}(\psi) = \underbrace{U\,\rho(\theta(\psi))}_{\text{teknenin hızı}}\cdot\cos(\psi - \beta)$$
+$$\text{VMG}(\psi) = \underbrace{\lambda\,U\,\rho(\theta(\psi))}_{\text{teknenin hızı}}\cdot\cos(\psi - \beta)$$
+
+($\lambda$ tüm pruvaları aynı oranda ölçeklediğinden optimum pruvayı değiştirmez, yalnızca VMG değerini değiştirir.)
 
 Her kontra için en iyi pruva ayrı aranır ($s=+1$: $\psi = \theta$, $s=-1$: $\psi = 360° - \theta$):
 
@@ -280,6 +351,7 @@ $$\Theta_{max} = \int_0^\infty \frac{v_0\,e^{-t/\tau}}{L}\,\sin\delta_{max}\,dt 
 
 * Fiziksel alt sınır ($\Theta_{max} \ge 65°$): $v_0 \ge 3.03$ m/s.
 * Navigasyonun karar ölçütü 1.3 güvenlik katsayısı içerir ($\Theta_{max} \ge 84.5°$): $v_0 \ge 3.94$ m/s. Bu sağlansa bile karar, manevranın ileri simülasyonuyla kesinleştirilir.
+* Genel olarak $v_{min} = 1.3\cdot65°\cdot L / (\tau\sin\delta_{max})$'dır. Yani eşik kütle ($\tau = m/k_g$) ve gövde boyu ($L$) ile değişir (Bölüm 3.2).
 
 Kumaş yelkenle bu, orsadan tack için yaklaşık **U ≥ 6.5 m/s** demektir (açık çevrim simülasyonu: 6.5 m/s'de tack başlangıç hızı 3.14 m/s). Tack mümkün değilse tekne **rüzgar altından ~290° dönerek (gybe)** kontra değiştirir; bu durumda değişim, manevra sonrasında hedefin hâlâ tutulabildiği ileri simülasyonla doğrulanınca yapılır.
 
@@ -336,7 +408,7 @@ Hedef ölü açının tam ortasında ($\beta = 0°$). Tekne 50.5°'de dar apazla
 | 7 | 229–245 | B→H | Tack | 279.5 | 80.5 | Tam Apaz | Sancak | −46 | −35.0 | −0.7 | 5.32 |
 | 8 | 245–258 | B→H | Rota düzeltme | 309.5 | 50.5 | Dar Apaz | Sancak | −32 | +7.9 | +16.7 | 5.85 |
 
-*δr manevra*: pruva yeni ψ*'a oturana kadarki en büyük dümen açısı; *δr seyir*: manevra sonrası ortalama dümen açısı. Tack satırlarında dümen ±35°'ye dayanır, yelken işaret değiştirir (bom karşı bordaya geçer); düz seyirde dümen yalnızca orsaya kaçmayı karşılayan ≈ ±0.2°'dir. Son satır, hedefin hemen yakınındaki son yaklaşma manevrasıdır.
+*δr manevra*: pruva yeni ψ\*'a oturana kadarki en büyük dümen açısı; *δr seyir*: manevra sonrası ortalama dümen açısı. Tack satırlarında dümen ±35°'ye dayanır, yelken işaret değiştirir (bom karşı bordaya geçer); düz seyirde dümen yalnızca orsaya kaçmayı karşılayan ≈ ±0.2°'dir. Son satır, hedefin hemen yakınındaki son yaklaşma manevrasıdır.
 
 **Bu testte atanan açılarda kuvvetler ve momentler** (Bölüm 3.1 formülleri; yelken değerleri ψ*'daki kararlı hızda, dümen değerleri manevradaki en büyük dümen açısı ve bölüm ortalama hızıyla):
 
@@ -377,6 +449,39 @@ Doğuya giden ilk bacak tam apazdır (9.2 m/s, düz). Kuzeye giden ikinci bacak 
 
 ![Kare rota](docs/figures/waypoint_square_U8.png)
 
+### 4.3 Arayüzde hedefe navigasyon hesap tablosu
+
+Hedefe Navigasyon ekranındaki **"🧮 Hedefe Navigasyon Hesap Tablosu"**, Serbest Seyir'deki kuvvet–moment tablosunun karşılığıdır. Adım 1–8'in formüllerini, kaydırıcıyla seçilen andaki ($t$) değerleriyle birlikte **Adım | Formül | Değer** biçiminde satır satır gösterir. Seçilen an, bacak içindeki son güdüm anına (1 s) yuvarlanır; ara durak veya hedefe varılan an yuvarlanmaz ve tabloda "Varış ✓" satırı görünür.
+
+Değerler rotayı hesaplayan fonksiyonların aynısıyla (`navigation.guidance_breakdown` → `guidance_decision`, `_rudder_cmd`, `saildrone_model.step`) ve kenar çubuğundaki fiziksel parametrelerle (Bölüm 3.2) hesaplanır. "sim" etiketli değerler, simülasyonun kaydettiği bir sonraki adımdır. Testlerde (4 rota + özel parametreli 1 rota) 1823 güdüm anının tamamında formül sonucu ile simülasyon değeri birebir (10⁻⁹ hassasiyetle) aynı çıkmıştır.
+
+**Örnek: 4.1 testinde ilk kontra değişimi anı ($t = 50$ s, varsayılan tekne, U = 8 m/s):**
+
+| Adım | Formül | Değer ($t = 50$ s) |
+|----------|---------------------|-------------|
+| Fiziksel parametreler | $\tau = m/k_g,\ \lambda,\ \omega_{wh},\ L$ | τ = 3.00 s, λ = 1.000, ω_wh = +0.350 °/s, L = 4.60 m |
+| Konum ve bacak | $\mathbf p = (x, y),\ \psi,\ v$ | B→H, (201.6, 211.1) m, ψ = 35.5°, v = 4.96 m/s |
+| 1 · Hedefe uzaklık | $d = \lVert\mathbf p_h - \mathbf p\rVert$ | 814.3 m |
+| 2 · Hedef kerterizi | $\beta = \operatorname{atan2}(x_h - x,\ y_h - y)$ | 345.7° |
+| 3 · Ölü açı kontrolü | $\theta_\beta = \min(\beta, 360° - \beta) \le 30°$ ? | θ_β = 14.3° → hedef ölü açıda, zikzakla gidilir |
+| 4 · VMG – iskele kontra ($s = +1$) | $\psi^*_+ = \arg\max_{\theta \ge 35°} \lambda U\rho(\theta)\cos(\theta - \beta)$ | ψ*₊ = 35.5°, V = 4.96 m/s, VMG = +3.20 m/s |
+| 4 · VMG – sancak kontra ($s = -1$) | $\psi^*_- = \arg\max_{\theta \ge 35°} \lambda U\rho(\theta)\cos(360° - \theta - \beta)$ | ψ*₋ = 309.5°, V = 6.80 m/s, VMG = +5.49 m/s |
+| 5 · Rota hattından sapma | $e_\perp = (\mathbf p - \mathbf p_B)\cdot\mathbf n,\ \ W = \operatorname{sat}(0.2D, 50, 1000)$ | e⊥ = +202 m, W = 200 m, hattan uzaklaşıyor |
+| 6 · Layline | $\psi^*_{-s}$ hedefi tutuyor mu? | Hayır |
+| 7 · Kontra kararı | $\text{VMG}_{-s} > \text{VMG}_s \wedge \big(\text{VMG}_s \le 0 \vee t_b \ge 10\,\text{s} \wedge (\text{layline} \vee \lvert e_\perp\rvert > W)\big)$ | **Kontra değişir: İskele → Sancak (tack)**; koşul: koridor dışı |
+| 8 · Tack fizibilitesi | $\Theta_{max} = \dfrac{v\,\tau\sin\delta_{max}}{L} \ge 1.3\cdot65°$ | Θ_max = 106° ≥ 84.5° (v ≥ 3.94 m/s) → tack mümkün |
+| 9 · Atanan pruva | $\psi^* = \psi^*_s$ | **309.5°** (sancak kontra, dar apaz) — sim: 309.5° |
+| 10 · Yelken (auto-trim) | $\delta_s = s(\psi)\,\delta_{opt}(\theta(\psi))$ | anlık +16°; ψ*'a oturunca −32° |
+| 11 · Pruva hatası | $e = \psi^* - \psi$ | −86.0° (kısa yol ölü açıdan geçer: tack) |
+| 12 · İstenen dönüş hızı | $r^* = \operatorname{sat}(k\,e, \pm30°/\text{s}) + s\,\omega_{wh}$ | −30.00 + 0.35 = −29.65 °/s |
+| 13 · Dümen açısı | $\delta_r = \operatorname{sat}\big(\arcsin(r^* L / v), \pm35°\big)$ | **−28.68°** — sim: −28.68° |
+| 14 · Hedef hız | $V^* = \lambda U\rho(\theta)\,\kappa,\ \ \kappa = 1 - c_{dd}(\delta_r/35°)^2$ | ρ = 0.62, κ = 0.852 → V* = 4.23 m/s |
+| 15 · Hız güncellemesi | $v^+ = V^* + (v - V^*)\,e^{-\Delta t/\tau}$ | 4.902 m/s — sim: 4.902 m/s |
+| 16 · Dönüş | $\dot\psi = \dfrac{v^+}{L}\sin\delta_r - s\,\omega_{wh},\ \ \psi^+ = \psi + \dot\psi\,\Delta t$ | ψ̇ = −29.65 °/s → ψ⁺ = 28.09° — sim: 28.09° |
+| 17 · Varış kontrolü | $d \le r_{varış}$ | 814 m > 10 m → devam |
+
+Bu anda iskele kontrada kalmak hedefe 3.20 m/s ile yaklaştırırken sancak kontra 5.49 m/s VMG sunar. Tekne başlangıç–hedef hattından koridor yarı genişliği kadar (W = 200 m) uzaklaşmış ve hâlâ uzaklaşmaktadır, bu yüzden kontra değiştirilir. Tekne 4.96 m/s ile tack eşiğinin (3.94 m/s) üzerinde olduğundan dönüş ölü açının içinden (tack) yapılır. Dümen istenen −29.65 °/s'lik dönüş hızını verecek açıya (−28.68°) gelir; bu açıdaki dümen sürüklemesi hızı 4.96'dan 4.90 m/s'ye düşürür. Açı Takip Tablosu'ndaki 3. satır (Tack, 50–109 s) bu karardan başlar.
+
 ---
 
 ## 5. Arayüz: Hedefe Navigasyon ekranı
@@ -391,7 +496,9 @@ Serbest Seyir ekranındaki kullanım kolaylığı Hedefe Navigasyon ekranına ta
 | Açı Takip Tablosu | Her yeni testte sıfırlanır; oynatma ilerledikçe rota bacaklarında sistemin atadığı pruva ψ*, TWA/seyir tipi, yelken δs ve dümen δr (manevra + seyir) satır satır eklenir, etkin satır vurgulanır. CSV olarak indirilebilir. |
 | Hızlandırılmış oynatma | Rota baştan sona ×1–×200 hızla oynatılır (varsayılan: görev ≈ 20–25 s'de); duraklat, baştan oynat ve zaman çubuğuyla istenen ana gidilebilir. |
 | Canlı göstergeler | Zaman, anlık hız (m/s, kts), pruva ψ ve atanan ψ*, yelken δs, dümen δr, seyir tipi/TWA, aktif bacak ve kalan mesafe oynatma boyunca canlı akar. |
-| Kuvvet ve moment paneli | Serbest Seyir ekranında girilen pruva, yelken ve dümen açısı için itki, yan kuvvet, direnç, dümen kuvveti ve momentler formülleriyle birlikte canlı hesaplanır. |
+| Kuvvet ve moment paneli | Serbest Seyir ekranında girilen pruva, yelken ve dümen açısı için τ, λ, V*, itki, yan kuvvet, direnç, dümen kuvveti, momentler, ω_wh ve dönüş formülleriyle birlikte, kenar çubuğundaki parametrelerle canlı hesaplanır. |
+| Fiziksel parametreler paneli | Sol kenar çubuğunda 13 parametre (Bölüm 3.2) ve türetilmiş büyüklükler tablosu (τ, λ, e, ω_wh, R_min, tack v_min). Değişiklik iki ekrandaki simülasyonu ve tabloları anında günceller; varsayılandan farklıysa uyarı verilir, "Varsayılan değerlere dön" düğmesiyle sıfırlanır. |
+| Navigasyon hesap tablosu | Hedefe Navigasyon ekranında, kaydırıcıyla seçilen andaki 17 adımın formülleri ve değerleri; simülasyonun kaydettiği değerlerle çapraz kontrol (Bölüm 4.3). |
 | Katamaran animasyonu | Haritadaki tekne ve "yakın görünüm" penceresinde yelkenin (mavi) ve dümen palalarının (kırmızı) anlık açıları, ölü açı dilimi ve atanan pruva ile birlikte dinamik olarak çizilir. |
 
 Uygulama: `streamlit run app.py`. Harita bileşeni `components/nav_player/index.html` dosyasındadır (dış bağımlılık yoktur).
@@ -400,11 +507,11 @@ Uygulama: `streamlit run app.py`. Harita bileşeni `components/nav_player/index.
 
 ## 6. Testler ve sonuçlar
 
-### 6.1 Birim testleri (102 / 102 ✔)
+### 6.1 Birim testleri (124 / 124 ✔)
 
-`tests/test_model.py` — ölü açıda itki sıfır; iskele/sancak simetrisi; kontra adlandırması; trim verimi tepe değeri ve sınırları; dümen cezası; düz seyirde yol = hız × süre; telemetri hızı = dinamik hız; pozitif dümen → sancağa dönüş; orsaya kaçma yönü; ölü açıda başlayan tekne hareketsiz; surge yakınsaması; auto-trim'in dönüş boyunca yeniden trim yapması; **kararlı hızda kuvvet dengesi (T = D_d + R), net kuvvetin m(V*−v)/τ olması, yelken kuvveti bileşenleri, moment işaretleri ve dengeleyici dümen açısı, ölü açıda kuvvetlerin sıfır olması.**
+`tests/test_model.py` (59 test) — ölü açıda itki sıfır; iskele/sancak simetrisi; kontra adlandırması; trim verimi tepe değeri ve sınırları; dümen cezası; düz seyirde yol = hız × süre; telemetri hızı = dinamik hız; pozitif dümen → sancağa dönüş; orsaya kaçma yönü; ölü açıda başlayan tekne hareketsiz; surge yakınsaması; auto-trim'in dönüş boyunca yeniden trim yapması; **kararlı hızda kuvvet dengesi (T = D_d + R), net kuvvetin m(V\*−v)/τ olması, yelken kuvveti bileşenleri, moment işaretleri ve dengeleyici dümen açısı, ölü açıda kuvvetlerin sıfır olması;** *fiziksel parametreler:* varsayılan tekne kalibre sabitleri (τ = 3 s, λ = 1, ω_wh = 0.35 °/s) aynen üretir; hız yelken alanıyla doğru, gövde direnciyle ters orantılı; kütle kararlı hızı değiştirmeyip yalnızca τ'yu büyütür ve hızlanmayı yavaşlatır; c_dd dümen cezasını belirler; L dönüş hızını, e / x_d orsaya kaçmayı ölçekler (e = 0 → denge, e < 0 → lee helm); 4 farklı parametre setinde kinematik ω_wh kuvvet modelindeki dengeleyici dümen açısıyla uyumludur; kuvvet tablosu verilen parametreleri kullanır.
 
-`tests/test_navigation.py` — 24 senaryonun tamamı; dümen sınırı ve ölü açıda geçen sürenin < %5 olması; rüzgar üstünde tack gerekliliği; hafif rüzgarda gybe; ölü açıda başlangıcın başarısızlık olarak raporlanması; sıfır mesafe; süre sınırı; 10 km menzil; 12 yönde erişilebilirlik; tack fizibilitesi; layline geometrisi; **ara duraklı rotada tüm durakların ziyareti; rota süre sınırı; yelken açısının rüzgar altı bordasında olması; açı takip tablosunun tack ve ara durakları kaydetmesi.**
+`tests/test_navigation.py` (65 test) — 24 senaryonun tamamı; dümen sınırı ve ölü açıda geçen sürenin < %5 olması; rüzgar üstünde tack gerekliliği; hafif rüzgarda gybe; ölü açıda başlangıcın başarısızlık olarak raporlanması; sıfır mesafe; süre sınırı; 10 km menzil; 12 yönde erişilebilirlik; tack fizibilitesi; layline geometrisi; **ara duraklı rotada tüm durakların ziyareti; rota süre sınırı; yelken açısının rüzgar altı bordasında olması; açı takip tablosunun tack ve ara durakları kaydetmesi;** *hesap tablosu ve parametreler:* hesap tablosunun 4 rotada (rüzgar üstü 8 ve 4 m/s, ara duraklı kare, verilen başlangıç pruvası) ve özel parametreli bir rotada her güdüm anında atanan pruvayı, dümen açısını, bir sonraki hızı ve pruvayı simülasyonla birebir üretmesi; varış anının yuvarlanmadan "varış" olarak gösterilmesi; 5 farklı parametre setinde 3 yöndeki hedefe ulaşılması; büyük yelkenle hedefe daha kısa sürede varılması.
 
 ### 6.2 Senaryo matrisi (24 / 24 ✔)
 
@@ -465,6 +572,8 @@ Kumaş yelken modeli ve navigasyon kontrolcüsüyle tekne, test edilen 72 başla
 
 Ulaşılamayan durumlar: (1) başlangıç pruvası ölü açıda ve tekne durgunsa, (2) süre sınırı mesafe/etkin VMG'den kısaysa, (3) tack yapılamıyor ve varış yarıçapı dönüş çapından küçükse.
 
+Teknenin fiziksel parametreleri artık arayüzden değiştirilebilir. Simülasyon, parametrelere bağlı türetilmiş büyüklükler (τ = m/k_g, λ, ω_wh, L) üzerinden aynı denklemlerle çalışır; varsayılan değerlerde sonuçlar değişmez. Hedefe navigasyonun her adımı arayüzdeki hesap tablosunda formülü ve sayısal değeriyle izlenebilir. Tablo, simülasyonun kendisini birebir yeniden üretir.
+
 ---
 
 ## 8. Model sınırlamaları
@@ -477,9 +586,10 @@ Ulaşılamayan durumlar: (1) başlangıç pruvası ölü açıda ve tekne durgun
 | Yaw ataleti yok (kinematik dönüş) | Manevralar gerçekte daha yavaş | $I_z\dot r = N_\delta\,\delta_r - N_r\,r$ |
 | Ölü açıda durgun tekne kurtulamaz | Uç durum 1 | Rüzgarla sürüklenme / backing modeli |
 | Rüzgar altı polar hız oranları iyimser | Kuvvet kontrolünde geniş apaz/pupada $C_N$ > 1.5 (Bölüm 3.1) | Poları görünür rüzgara göre yeniden kalibre etmek |
-| Fiziksel parametreler (m, A_y, A_d, e) varsayımdır; gövde direnci doğrusal | Kuvvetlerin mutlak değeri bu parametrelere bağlıdır | Tekne ölçüleri ve deney verisiyle güncellemek |
-| Kinematik dönüş dümen stall'unu içermez | 20°'nin üzerinde dönüş hızı fazla tahmin edilir | Dümen kuvvetine dayalı yaw dinamiği |
-| $\tau = 3$ s varsayımdır | Tack eşiğini belirler ($v_{min} \propto 1/\tau$) | Gerçek tekne verisiyle tanımlama |
+| Fiziksel parametreler arayüzden değiştirilebilir, ancak hız poları varsayılan tekneye (A_s = 20 m², k_g = 83.33 N·s/m) kalibredir ve λ ile ölçeklenir; gövde direnci doğrusaldır | Hız A_s/k_g ile doğru orantılı artar (gerçekte karesel dirençle ≈ √(A_s/k_g)); varsayılandan büyük sapmalarda hız fazla tahmin edilir | Poları ve direnci tekne ölçüleri / deney verisiyle yeniden kalibre etmek, karesel direnç |
+| ω_wh tam apazda kalibre edilip seyir bandından bağımsız alınır | Orsada (cot δs büyük) gerçek orsaya kaçma daha güçlüdür | ω_wh'yi δs ve hıza bağlamak |
+| Kinematik dönüş dümen stall'unu içermez | 20°'nin üzerinde dönüş hızı fazla tahmin edilir; dümen alanı dönüş hızını değil yalnızca kuvvet/momenti ve ω_wh'yi etkiler | Dümen kuvvetine dayalı yaw dinamiği |
+| $\tau = m/k_g$ (varsayılan 3 s) varsayımdır | Tack eşiğini belirler ($v_{min} \propto L/\tau$) | Gerçek tekne verisiyle tanımlama |
 
 ---
 
@@ -498,7 +608,11 @@ python analysis/run_experiments.py
 streamlit run app.py
 ```
 
-Grafikler `docs/figures/`, tablolar `docs/results/` altına yeniden yazılır (açı takip tabloları: `angle_log_S4_U8.md`, `angle_log_square_U8.md`).
+Grafikler `docs/figures/`, tablolar `docs/results/` altına yeniden yazılır (açı takip tabloları: `angle_log_S4_U8.md`, `angle_log_square_U8.md`). Word sürümü bu dosyadan üretilir:
+
+```bash
+pandoc RAPOR.md -o RAPOR.docx
+```
 
 ---
 

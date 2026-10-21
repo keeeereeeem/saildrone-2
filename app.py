@@ -1,3 +1,4 @@
+import dataclasses
 import hashlib
 import importlib
 import json
@@ -143,7 +144,7 @@ def sync_input(label, key_prefix, min_val, max_val, default_val, step=1, help_te
 analyze_points_of_sail_360 = sm.analyze_points_of_sail_360
 
 # --- SİMÜLASYON VE ÇİZİM ÇEKİRDEĞİ ---
-def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, sim_time_s, auto_trim=False):
+def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, sim_time_s, auto_trim=False, phys=sm.PHYS):
     """
     330°-030° Ölü Açı sektörü, kumaş yelken poları, dümen kinematiği ve merkezi katamaran
     görselleştirmesi (tek yelken modeli: Kumaş Yelken – Cambered / Klasik).
@@ -170,13 +171,13 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
     rudder_clamped = float(np.clip(rudder_deg, -sm.RUDDER_MAX_DEG, sm.RUDDER_MAX_DEG))
 
     # Anlık başlangıç hızı (simülasyon döngüsüyle aynı fonksiyon)
-    base_speed_ms = sm.target_speed(heading_deg, sail_boom_angle, rudder_clamped, profile, wind_speed_ms, auto_trim)
+    base_speed_ms = sm.target_speed(heading_deg, sail_boom_angle, rudder_clamped, profile, wind_speed_ms, auto_trim, phys)
     base_speed_kts = base_speed_ms * sm.MS_TO_KTS
 
     # 4. SİMÜLASYON YOLU (surge ataleti + kinematik dönüş + orsaya kaçma):
     dt = sm.DT
     sim = sm.simulate_open_loop(heading_deg, sail_boom_angle, rudder_clamped, profile, wind_speed_ms,
-                                sim_time_s, auto_trim=auto_trim, dt=dt)
+                                sim_time_s, auto_trim=auto_trim, dt=dt, phys=phys)
     traj_x = list(sim["x"])
     traj_y = list(sim["y"])
     total_distance_m = sim["distance"]
@@ -406,6 +407,81 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
 st.markdown("## ⛵ Otonom Yelkenli Katamaran ve Saildrone Simülatörü")
 st.caption("360° Pusula Seyirleri • 330°-030° Ölü Açı • Kumaş Yelken (Cambered / Klasik) Polar Modeli • Realist Dümen")
 
+# --- TEKNENİN FİZİKSEL PARAMETRELERİ (KENAR ÇUBUĞU) ---
+# Her iki sekme de bu değerlerle kurulan sm.Physics nesnesini kullanır; değişiklikte sayfa yeniden
+# çalışır, simülasyon ve hesap tabloları anlık güncellenir.
+PHYS_FIELDS = [   # (grup, [(alan, etiket, min, maks, adım, biçim, açıklama)])
+    ("⚖️ Kütle ve direnç", [
+        ("mass", "Kütle m (kg)", 20.0, 5000.0, 5.0, "%.0f",
+         "Tekne + ekipman kütlesi. τ = m / k_g: kütle arttıkça tekne daha yavaş hızlanır ve daha uzun süre süzülür."),
+        ("hull_drag", "Gövde direnç katsayısı k_g (N·s/m)", 5.0, 2000.0, 1.0, "%.2f",
+         "Doğrusal gövde direnci R = k_g·v. Kararlı hız k_g ile ters orantılıdır (V* ∝ A_s / k_g)."),
+        ("rudder_drag", "Dümen sürükleme katsayısı c_dd", 0.0, 0.9, 0.01, "%.2f",
+         "Tam dümende (±35°) hız kaybı oranı: κ = 1 − c_dd·(δr/35°)²."),
+    ]),
+    ("⛵ Yelken", [
+        ("sail_area", "Yelken alanı A_s (m²)", 1.0, 200.0, 0.5, "%.1f",
+         "Yelken itkisi alanla orantılıdır; polar 20 m² için kalibredir (λ = A_s/20 · 83.33/k_g)."),
+        ("ce_arm", "Ağırlık merkezi – yelken basınç merkezi a_CE (m)", -3.0, 3.0, 0.01, "%.2f",
+         "Yelken basınç merkezinin ağırlık merkezine boyuna uzaklığı (kıça doğru +)."),
+        ("clr_arm", "Ağırlık merkezi – yanal direnç merkezi a_LR (m)", -3.0, 3.0, 0.01, "%.2f",
+         "Gövde/salma yanal direnç merkezinin ağırlık merkezine boyuna uzaklığı (kıça doğru +). "
+         "e = a_CE − a_LR > 0 ise tekne orsaya kaçar (weather helm), < 0 ise rüzgar altına kaçar."),
+    ]),
+    ("🕹️ Gövde ve dümen", [
+        ("hull_length", "Efektif gövde boyu L (m)", 1.0, 30.0, 0.1, "%.2f",
+         "Kinematik dönüş: ψ̇ = v·sin δr / L. Asgari dönüş yarıçapı R = L / sin 35°."),
+        ("rudder_area", "Dümen alanı A_d (m², iki pala)", 0.01, 5.0, 0.01, "%.3f",
+         "Dümen yan kuvveti Y = ½·ρ_su·A_d·C_L·v²."),
+        ("rudder_arm", "Ağırlık merkezi – dümen mesafesi x_d (m)", 0.1, 15.0, 0.05, "%.2f",
+         "Dümen momenti N_d = Y·x_d."),
+        ("rudder_cla", "Dümen kaldırma eğimi C_Lα (1/rad)", 0.5, 6.28, 0.01, "%.2f",
+         "C_L = C_Lα·δr; en-boy oranı AR için C_Lα ≈ 2π·AR/(AR+2) (AR = 2.5 → 3.49)."),
+        ("rudder_clmax", "Dümen stall sınırı C_L,max", 0.3, 2.5, 0.05, "%.2f",
+         "Bu değerin üzerinde pala stall'a girer, yan kuvvet artmaz."),
+    ]),
+    ("🌊 Akışkan", [
+        ("rho_air", "Hava yoğunluğu ρ_hava (kg/m³)", 0.9, 1.5, 0.005, "%.3f", "Yelken kuvvet katsayısı C_N hesabında kullanılır."),
+        ("rho_water", "Su yoğunluğu ρ_su (kg/m³)", 990.0, 1050.0, 1.0, "%.0f", "Deniz suyu ≈ 1025, tatlı su ≈ 1000."),
+    ]),
+]
+
+
+def reset_phys():
+    for _g, _fields in PHYS_FIELDS:
+        for _name, *_ in _fields:
+            st.session_state[f"phys_{_name}"] = float(getattr(sm.PHYS, _name))
+
+
+with st.sidebar:
+    st.markdown("### 🔧 Tekne Fiziksel Parametreleri")
+    st.caption("Serbest seyir ve hedefe navigasyon simülasyonları ile hesap tabloları bu değerlerle anlık güncellenir.")
+    for _group, _fields in PHYS_FIELDS:
+        st.markdown(f"**{_group}**")
+        for _name, _label, _lo, _hi, _step, _fmt, _help in _fields:
+            st.session_state.setdefault(f"phys_{_name}", float(getattr(sm.PHYS, _name)))
+            st.number_input(_label, _lo, _hi, step=_step, format=_fmt, key=f"phys_{_name}", help=_help)
+    st.button("↩️ Varsayılan değerlere dön", on_click=reset_phys, width="stretch")
+    phys = sm.Physics(**{_name: float(st.session_state[f"phys_{_name}"])
+                         for _g, _fields in PHYS_FIELDS for _name, *_ in _fields})
+    _tack_need = (2.0 * sm.NO_GO_DEG + nav.NavConfig().no_go_margin) * nav.NavConfig().tack_safety
+    _sin_max = np.sin(np.radians(sm.RUDDER_MAX_DEG))
+    st.markdown("**📐 Türetilmiş büyüklükler**")
+    st.markdown(f"""
+| Büyüklük | Değer |
+|---|---|
+| Surge zaman sabiti $\\tau=m/k_g$ | {phys.tau:.2f} s |
+| Hız ölçeği $\\lambda=\\frac{{A_s}}{{20}}\\cdot\\frac{{83.33}}{{k_g}}$ | {phys.speed_scale:.3f} |
+| CE–CLR kaçıklığı $e=a_{{CE}}-a_{{LR}}$ | {phys.ce_offset:+.2f} m |
+| Orsaya kaçma hızı $\\omega_{{wh}}$ | {phys.weather_helm:+.3f} °/s |
+| Asgari dönüş yarıçapı $L/\\sin35^\\circ$ | {phys.hull_length / _sin_max:.1f} m |
+| Tack için asgari hız $\\frac{{1.3\\cdot65^\\circ\\,L}}{{\\tau\\sin35^\\circ}}$ | {np.radians(_tack_need) * phys.hull_length / (phys.tau * _sin_max):.2f} m/s |
+""")
+    st.caption("ω_wh = 0.35 °/s · Φ/Φ_ref,  Φ = e·k_g / (ρ_su·A_d·C_Lα·x_d·L)")
+    if phys != sm.PHYS:
+        st.warning("Parametreler varsayılandan farklı: hız poları ve orsaya kaçma, yukarıdaki λ ve ω_wh ile ölçeklenir. "
+                   "Rapordaki sayısal sonuçlar varsayılan tekne içindir.")
+
 tab_free, tab_nav = st.tabs(["⛵ Serbest Seyir", "🎯 Hedefe Navigasyon"])
 
 with tab_free:
@@ -495,7 +571,8 @@ with tab_free:
                 </tbody>
             </table>
             <div style="font-size:0.75rem; color:#64748b; margin-top:5px;">
-            * Ölü Açı: 330° - 030° (TWA ≤ 30°): itki yok. Hız = U × oran × trim verimi × dümen cezası.
+            * Ölü Açı: 330° - 030° (TWA ≤ 30°): itki yok. Hız = λ × U × oran × trim verimi × dümen cezası
+            (λ = hız ölçeği, varsayılan teknede 1; kenar çubuğundaki fiziksel parametrelerden türetilir).
             </div>
             """, unsafe_allow_html=True)
 
@@ -508,7 +585,8 @@ with tab_free:
             rudder_deg=rudder_angle_val,
             wind_speed_ms=float(wind_speed_val),
             sim_time_s=float(sim_time_val),
-            auto_trim=auto_trim_active
+            auto_trim=auto_trim_active,
+            phys=phys
         )
 
         st.pyplot(fig, width='stretch')
@@ -556,32 +634,34 @@ with tab_free:
 
         with st.expander("🧮 Kuvvet ve Moment Hesabı (kararlı hızda, N ve N·m)", expanded=False):
             fm = sm.force_moment_breakdown(boat_heading_val, sail_angle_val, rudder_angle_val,
-                                           float(wind_speed_val), auto_trim=auto_trim_active)
-            P = sm.PHYS
+                                           float(wind_speed_val), auto_trim=auto_trim_active, phys=phys)
             if fm["drive"] == 0.0:
                 st.warning("Tekne ölü açıda: yelken yapraklıyor, itki ve yelken kuvveti sıfır; hız olmadığı için dümen de moment üretmez.")
             else:
                 st.markdown(f"""
 | Adım | Formül | Değer |
 |---|---|---|
+| Fiziksel parametreler | $m,\\;k_g,\\;A_s,\\;L,\\;A_d,\\;x_d,\\;e=a_{{CE}}-a_{{LR}}$ | {phys.mass:.0f} kg, {phys.hull_drag:.2f} N·s/m, {phys.sail_area:.1f} m², {phys.hull_length:.2f} m, {phys.rudder_area:.3f} m², {phys.rudder_arm:.2f} m, {phys.ce_offset:+.2f} m |
+| Surge zaman sabiti, hız ölçeği | $\\tau=m/k_g$, $\\lambda=\\frac{{A_s}}{{20}}\\cdot\\frac{{83.33}}{{k_g}}$ | τ = {fm['tau']:.2f} s, λ = {fm['speed_scale']:.3f} |
+| Kararlı (hedef) hız | $V^*=\\lambda\\,U\\rho(\\theta)\\,\\eta\\,\\kappa$, $\\kappa=1-c_{{dd}}(\\delta_r/35^\\circ)^2$ | **{fm['v_star']:.2f} m/s** (ρ = {fm['ratio']:.2f}, η = {fm['eta']:.2f}, κ = {fm['kappa']:.3f}) |
 | Görünür rüzgar | $V_A=\\sqrt{{v^2+U^2+2vU\\cos\\psi}}$ | {fm['va']:.2f} m/s, AWA {fm['awa']:.0f}° |
-| Yelken itkisi | $T=\\frac{{m}}{{\\tau}}U\\rho\\eta$ | **{fm['drive']:.0f} N** (η = {fm['eta']:.2f}) |
-| Yelken toplam kuvveti (kirişe dik) | $F_N=T/\\sin\\delta_s$ | {fm['normal']:.0f} N (C_N = {fm['c_n']:.2f}) |
+| Yelken itkisi | $T=k_g\\lambda\\,U\\rho\\eta\\;(\\propto A_s)$ | **{fm['drive']:.0f} N** |
+| Yelken toplam kuvveti (kirişe dik) | $F_N=T/\\sin\\delta_s$, $C_N=F_N/(\\tfrac12\\rho_{{hava}}V_A^2A_s)$ | {fm['normal']:.0f} N (C_N = {fm['c_n']:.2f}) |
 | Yan kuvvet (rüzgar altına) | $F_{{yan}}=F_N\\cos\\delta_s$ | {fm['side']:.0f} N |
-| Gövde direnci | $R=\\frac{{m}}{{\\tau}}v$ | {fm['hull_drag']:.0f} N |
+| Gövde direnci | $R=k_g\\,v$ | {fm['hull_drag']:.0f} N |
 | Dümen sürüklemesi | $D_d=T(1-\\kappa)$ | {fm['rudder_drag']:.0f} N |
-| Net ileri kuvvet | $T-D_d-R$ | {fm['net']:.0f} N → v = {fm['v']:.2f} m/s |
-| Dümen yan kuvveti | $Y=\\tfrac12\\rho_{{su}}A_dC_L(\\delta_r)v^2$ | {fm['rudder_force']:.0f} N (C_L = {fm['rudder_cl']:.2f}) |
+| Net ileri kuvvet | $T-D_d-R=m\\,\\dot v$ | {fm['net']:.0f} N → v = {fm['v']:.2f} m/s |
+| Dümen yan kuvveti | $Y=\\tfrac12\\rho_{{su}}A_dC_L(\\delta_r)v^2$, $C_L=\\mathrm{{sat}}(C_{{L\\alpha}}\\delta_r,\\pm C_{{L,max}})$ | {fm['rudder_force']:.0f} N (C_L = {fm['rudder_cl']:.2f}) |
 | Dümen momenti | $N_d=Y\\,x_d$ | **{fm['rudder_moment']:.0f} N·m** |
 | Yelken momenti (orsaya kaçma) | $N_y=-s\\,F_{{yan}}\\,e$ | {fm['sail_moment']:.0f} N·m |
 | Net dönme momenti | $N_d+N_y$ | **{fm['net_moment']:.0f} N·m** (+: sancağa) |
-| Dönüş | $\\dot\\psi$, $R=v/\\dot\\psi$ | {fm['yaw_rate']:+.1f} °/s, R = {('∞' if fm['turn_radius'] > 1e3 else f"{fm['turn_radius']:.1f} m")} |
+| Orsaya kaçma hızı | $\\omega_{{wh}}=0.35\\,\\frac{{\\Phi}}{{\\Phi_{{ref}}}}$, $\\Phi=\\frac{{e\\,k_g}}{{\\rho_{{su}}A_dC_{{L\\alpha}}x_dL}}$ | {fm['weather_helm']:+.3f} °/s |
+| Dönüş | $\\dot\\psi=\\frac{{v}}{{L}}\\sin\\delta_r-s\\,\\omega_{{wh}}$, $R=v/\\dot\\psi$ | {fm['yaw_rate']:+.2f} °/s, R = {('∞' if fm['turn_radius'] > 1e3 else f"{fm['turn_radius']:.1f} m")} |
 | Gereken merkezcil kuvvet | $F_c=m\\,v\\,\\dot\\psi$ | {fm['centripetal']:.0f} N |
-| Orsaya kaçmayı dengeleyen dümen | $\\delta_{{r,denge}}$ | {fm['rudder_balance']:+.2f}° |
+| Orsaya kaçmayı dengeleyen dümen | $\\delta_{{r,denge}}=\\frac{{-N_y}}{{x_d\\,\\tfrac12\\rho_{{su}}A_dC_{{L\\alpha}}v^2}}$ | {fm['rudder_balance']:+.2f}° |
 """)
-            st.caption(f"Varsayılan fiziksel parametreler: m = {P.mass:.0f} kg, yelken alanı {P.sail_area:.0f} m², "
-                       f"dümen alanı {P.rudder_area:.2f} m², x_d = {P.rudder_arm:.1f} m, e = {P.ce_offset:.2f} m, τ = {sm.TAU_SURGE:.0f} s. "
-                       "Kuvvetler, simülasyonun hız ve dönüş denklemlerinden bu parametrelerle türetilir.")
+            st.caption("Değerler kenar çubuğundaki fiziksel parametrelerle anlık hesaplanır. Kuvvetler, simülasyonun "
+                       "hız ve dönüş denklemlerinden bu parametrelerle türetilir (polar 20 m² yelken, k_g = 83.33 N·s/m için kalibredir).")
 
 
 
@@ -651,9 +731,14 @@ def new_test():
     st.session_state["nav_test_no"] += 1
 
 
+def nav_config(arrival_radius, max_time, allow_tack, phys_values):
+    return nav.NavConfig(arrival_radius=arrival_radius, max_time=max_time, allow_tack=allow_tack,
+                         phys=sm.Physics(*phys_values))
+
+
 @st.cache_data(show_spinner=False, max_entries=64)
-def run_route(points, wind_ms, init_heading, arrival_radius, max_time, allow_tack):
-    cfg = nav.NavConfig(arrival_radius=arrival_radius, max_time=max_time, allow_tack=allow_tack)
+def run_route(points, wind_ms, init_heading, arrival_radius, max_time, allow_tack, phys_values):
+    cfg = nav_config(arrival_radius, max_time, allow_tack, phys_values)
     res = nav.navigate_route(list(points), wind_ms, initial_heading=init_heading, cfg=cfg)
     return res, nav.angle_log(res)
 
@@ -670,6 +755,98 @@ def route_payload(res, max_samples=3000):
 
     return dict(t=r(res.t, 2), x=r(res.x, 2), y=r(res.y, 2), psi=r(res.psi, 2), psi_des=r(res.psi_des, 2),
                 v=r(res.v, 3), rudder=r(res.rudder, 2), sail=r(res.sail, 1), leg=[int(v) for v in res.leg[idx]])
+
+
+SIDE_NAME = {1: "İskele", -1: "Sancak"}
+
+
+def nav_calc_rows(bd, n_points, cfg):
+    """Hedefe navigasyon hesap tablosu: (adım, formül, değer) satırları – nav.guidance_breakdown çıktısından."""
+    P = cfg.phys
+    tx, ty = bd["target"]
+    rows = [
+        ("Fiziksel parametreler", r"$\tau=m/k_g,\;\lambda,\;\omega_{wh},\;L$",
+         f"τ = {cfg.tau:.2f} s, λ = {P.speed_scale:.3f}, ω_wh = {P.weather_helm:+.3f} °/s, L = {P.hull_length:.2f} m"),
+        ("Konum ve bacak", r"$\mathbf{p}=(x,y),\;\psi,\;v$",
+         f"{nav.leg_name(bd['leg'], n_points)} bacağı, t = {bd['t']:.2f} s: ({bd['x']:.1f}, {bd['y']:.1f}) m, "
+         f"ψ = {bd['psi']:.1f}°, v = {bd['v']:.2f} m/s"),
+        ("1 · Hedefe uzaklık", r"$d=\lVert\mathbf{p}_h-\mathbf{p}\rVert$", f"{bd['dist']:.1f} m (hedef: {tx:.0f}, {ty:.0f} m)"),
+    ]
+    if bd["arrived"]:
+        rows.append(("Varış", r"$d\le r_v$",
+                     f"✅ {bd['dist']:.1f} m ≤ {cfg.arrival_radius:.0f} m: nokta tutuldu"
+                     + (", tekne bir sonraki bacağın en iyi VMG kontrasına geçer" if bd["leg"] < n_points - 2 else "")))
+        return rows
+
+    o, s = bd["opts"], bd["side"]
+
+    def vmg_txt(sd):
+        h, vmg, spd = o[sd]
+        return f"ψ* = {h:.1f}° (θ = {sm.true_wind_angle(h):.1f}°), V = {spd:.2f} m/s, VMG = {vmg:+.2f} m/s"
+
+    conds = [name for name, ok in (("hedef geride (VMG ≤ 0)", bd["behind"]), ("layline", bd["layline"]),
+                                   ("koridor dışı", bd["out_of_corridor"])) if ok]
+    if bd["switch"]:
+        decision = (f"**Kontra değişir: {SIDE_NAME[s]} → {SIDE_NAME[-s]}** "
+                    f"({'tack' if bd['is_tack'] else 'rüzgar altından dönüş / gybe'}); koşul: {', '.join(conds)}")
+    elif bd["oth_vmg"] <= bd["cur_vmg"]:
+        decision = f"{SIDE_NAME[s]} kontrada kal: diğer kontranın VMG'si daha yüksek değil"
+    elif not conds:
+        decision = f"{SIDE_NAME[s]} kontrada kal: diğer kontra daha iyi ama değişim koşulu yok"
+    elif not bd["leg_done"] and not bd["behind"]:
+        decision = (f"{SIDE_NAME[s]} kontrada kal: son değişimden bu yana "
+                    f"{bd['t_leg'] - bd['t_switch']:.0f} s < {cfg.min_leg_time:.0f} s")
+    else:
+        decision = f"{SIDE_NAME[s]} kontrada kal: rüzgar altından dönüş sonrası hedef tutulamıyor (ileri simülasyon)"
+
+    i_band = sm.band_index(bd["twa_des"])
+    regime = sm.BANDS[i_band][2] if i_band is not None else "Ölü açı"
+    sat = " (±35° doyumda)" if bd["rudder_saturated"] else ""
+
+    def sim(key, fmt):
+        return f" — sim: {bd[key]:{fmt}}" if bd.get(key) is not None else ""
+
+    rows += [
+        ("2 · Hedef kerterizi", r"$\beta=\mathrm{atan2}(x_h-x,\;y_h-y)$", f"{bd['bearing']:.1f}°"),
+        ("3 · Ölü açı kontrolü", r"$\theta_\beta=\min(\beta,\;360^\circ-\beta)\le30^\circ\,?$",
+         f"θ_β = {bd['twa_bearing']:.1f}° → "
+         + ("hedef ölü açıda: kontra değiştirerek (zikzak) gidilir" if bd["twa_bearing"] <= sm.NO_GO_DEG
+            else "hedef ölü açı dışında")),
+        ("4 · VMG – iskele kontra (s = +1)",
+         r"$\psi^*_{+}=\arg\max_{\theta\ge35^\circ}\lambda U\rho(\theta)\cos(\theta-\beta)$", vmg_txt(1)),
+        ("4 · VMG – sancak kontra (s = −1)",
+         r"$\psi^*_{-}=\arg\max_{\theta\ge35^\circ}\lambda U\rho(\theta)\cos(360^\circ-\theta-\beta)$", vmg_txt(-1)),
+        ("5 · Rota hattından sapma", r"$e_\perp=(\mathbf{p}-\mathbf{p}_B)\cdot\mathbf{n},\;W=\mathrm{sat}(0.2D,\,50,\,1000)$",
+         f"e⊥ = {bd['xtrack']:+.0f} m, W = {bd['corridor']:.0f} m (D = {bd['d0']:.0f} m), "
+         f"{'hattan uzaklaşıyor' if bd['moving_out'] else 'hatta yaklaşıyor'}"),
+        ("6 · Layline", r"$\psi^*_{-s}$ hedefi tutuyor mu?",
+         f"{'Evet' if bd['layline'] else 'Hayır'} ({SIDE_NAME[-s]} kontra, ψ* = {o[-s][0]:.1f}°)"),
+        ("7 · Kontra kararı",
+         r"$\mathrm{VMG}_{-s}>\mathrm{VMG}_s\wedge\big(\mathrm{VMG}_s\le0\vee t_b\ge10\,\mathrm{s}\wedge(\mathrm{layline}\vee\lvert e_\perp\rvert>W)\big)$",
+         decision),
+        ("8 · Tack fizibilitesi", r"$\Theta_{max}=\dfrac{v\,\tau\sin\delta_{max}}{L}\ge1.3\cdot65^\circ$",
+         f"Θ_max = {bd['tack_capacity']:.0f}°, gereken {bd['tack_need']:.1f}° (v ≥ {bd['tack_vmin']:.2f} m/s) → "
+         + ("tack mümkün" if bd["tack_ok"] else "tack yapılamaz, rüzgar altından dönülür")),
+        ("9 · Atanan pruva", r"$\psi^*=\psi^*_{s}$",
+         f"**{bd['psi_des']:.1f}°** ({SIDE_NAME[bd['new_side']]} kontra, TWA {bd['twa_des']:.1f}°, {regime})"
+         + sim("sim_psi_des", ".1f")),
+        ("10 · Yelken (auto-trim)", r"$\delta_s=s(\psi)\,\delta_{opt}(\theta(\psi))$",
+         f"anlık δs = {bd['sail']:+.0f}° (θ = {bd['twa']:.1f}°); ψ*'a oturunca {bd['sail_des']:+.0f}° (+: sancak)"),
+        ("11 · Pruva hatası", r"$e=\psi^*-\psi$",
+         f"{bd['err']:+.1f}°" + (" (taahhüt edilen dönüş yönünde uzun yol)" if bd["long_way"] else "")),
+        ("12 · İstenen dönüş hızı", r"$r^*=\mathrm{sat}(k\,e,\;\pm30^\circ/\mathrm{s})+s\,\omega_{wh},\;k=0.5\,\mathrm{s}^{-1}$",
+         f"{bd['r_fb']:+.2f} {bd['r_ff']:+.3f} = {bd['r_des']:+.2f} °/s"),
+        ("13 · Dümen açısı", r"$\delta_r=\mathrm{sat}\big(\arcsin(r^*L/v),\;\pm35^\circ\big)$",
+         f"**{bd['rudder']:+.2f}°**{sat}" + sim("sim_rudder", "+.2f")),
+        ("14 · Hedef hız", r"$V^*=\lambda U\rho(\theta)\,\kappa,\;\kappa=1-c_{dd}(\delta_r/35^\circ)^2$",
+         f"ρ = {bd['ratio']:.2f}, κ = {bd['kappa']:.3f} → V* = {bd['v_star']:.2f} m/s"),
+        ("15 · Hız güncellemesi", r"$v^+=V^*+(v-V^*)\,e^{-\Delta t/\tau}$",
+         f"{bd['v_next']:.3f} m/s" + sim("sim_v", ".3f")),
+        ("16 · Dönüş", r"$\dot\psi=\dfrac{v^+}{L}\sin\delta_r-s\,\omega_{wh},\;\psi^+=\psi+\dot\psi\,\Delta t$",
+         f"ψ̇ = {bd['yaw']:+.2f} °/s → ψ⁺ = {bd['psi_next']:.2f}°" + sim("sim_psi", ".2f")),
+        ("17 · Varış kontrolü", r"$d\le r_v$", f"{bd['dist']:.0f} m > {cfg.arrival_radius:.0f} m → devam"),
+    ]
+    return rows
 
 
 ANGLE_COLUMNS = {
@@ -735,8 +912,10 @@ with tab_nav:
         st.markdown("### 🗺️ Rota, Oynatma ve Açı Takibi")
         test_no = st.session_state["nav_test_no"]
         points = tuple([(sx, sy)] + [tuple(p) for p in wps] + [(tx, ty)])
-        res, angle_rows = run_route(points, float(nav_wind), init_h, float(arr_r), float(max_t), allow_tack)
-        run_id = hashlib.md5(json.dumps([points, nav_wind, init_h, arr_r, max_t, allow_tack, test_no]).encode()).hexdigest()[:12]
+        phys_values = dataclasses.astuple(phys)
+        res, angle_rows = run_route(points, float(nav_wind), init_h, float(arr_r), float(max_t), allow_tack, phys_values)
+        run_id = hashlib.md5(json.dumps([points, nav_wind, init_h, arr_r, max_t, allow_tack, test_no,
+                                         phys_values]).encode()).hexdigest()[:12]
         _val = _nav_player(
             run_id=run_id, test_no=test_no,
             points=dict(start=[sx, sy], target=[tx, ty], waypoints=wps),
@@ -761,3 +940,18 @@ with tab_nav:
         _tbl = pd.DataFrame(angle_rows).rename(columns=ANGLE_COLUMNS)
         st.download_button("⬇️ Açı takip tablosunu indir (CSV)", _tbl.to_csv(index=False).encode("utf-8-sig"),
                            file_name=f"aci_takip_test{test_no}.csv", mime="text/csv")
+
+        with st.expander("🧮 Hedefe Navigasyon Hesap Tablosu (formüller ve seçilen andaki değerler)", expanded=False):
+            _t_end = float(res.t[-1])
+            if st.session_state.get("nav_calc_t", 0.0) > _t_end:
+                st.session_state["nav_calc_t"] = 0.0
+            _t_sel = st.slider("Hesap anı t (s)", 0.0, max(_t_end, 1.0), step=1.0, key="nav_calc_t",
+                               help="Rotanın bu anındaki güdüm, yelken ve dümen hesabı. Güdüm her 1 s'de bir çalışır; "
+                                    "seçilen an, bacak içindeki son güdüm anına yuvarlanır.")
+            _cfg = nav_config(float(arr_r), float(max_t), allow_tack, phys_values)
+            _bd = nav.guidance_breakdown(res, int(np.searchsorted(res.t, _t_sel - 1e-9)), float(nav_wind), _cfg)
+            st.markdown("| Adım | Formül | Değer |\n|---|---|---|\n"
+                        + "\n".join(f"| {a} | {f} | {v} |" for a, f, v in nav_calc_rows(_bd, len(points), _cfg)))
+            st.caption("Değerler, rota simülasyonunun kullandığı fonksiyonlarla ve kenar çubuğundaki fiziksel "
+                       "parametrelerle hesaplanır. 'sim' değerleri simülasyonun kaydettiği bir sonraki adımdır; "
+                       "formül sonucuyla aynı olmalıdır. Kerteriz ve pruva pusula açısıdır (0° = kuzey, rüzgarın geldiği yön).")

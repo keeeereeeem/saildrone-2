@@ -136,3 +136,65 @@ def test_moment_signs_and_balance():
 def test_no_force_in_irons():
     f = m.force_moment_breakdown(10, 40, 0, 8.0)
     assert f["drive"] == 0.0 and f["normal"] == 0.0 and f["side"] == 0.0 and f["v"] == 0.0
+
+
+# --- Kullanıcı tarafından değiştirilebilen fiziksel parametreler ---
+def test_default_physics_reproduces_calibrated_constants():
+    P = m.Physics()
+    assert P == m.PHYS
+    assert P.tau == m.TAU_SURGE
+    assert P.speed_scale == 1.0
+    assert P.weather_helm == m.WEATHER_HELM_DPS
+    assert P.hull_length == m.L_HULL and P.rudder_drag == m.RUDDER_DRAG
+    assert P.ce_offset == pytest.approx(0.20)
+
+
+def test_sail_area_and_hull_drag_scale_speed():
+    base = m.target_speed(90, 46, 0, "cloth", 8.0)
+    assert m.target_speed(90, 46, 0, "cloth", 8.0, phys=m.Physics(sail_area=30.0)) == pytest.approx(1.5 * base)
+    assert m.target_speed(90, 46, 0, "cloth", 8.0, phys=m.Physics(hull_drag=2 * m.PHYS.hull_drag)) == pytest.approx(base / 2)
+    # kütle kararlı hızı değiştirmez, yalnızca zaman sabitini büyütür
+    heavy = m.Physics(mass=500.0)
+    assert m.target_speed(90, 46, 0, "cloth", 8.0, phys=heavy) == pytest.approx(base)
+    assert heavy.tau == pytest.approx(2 * m.TAU_SURGE)
+
+
+def test_mass_slows_surge_response():
+    s0 = m.BoatState(0.0, 0.0, 90.0, 0.0)
+    light = m.step(s0, 0, 0, "cloth", 8.0, auto_trim=True, phys=m.Physics(mass=125.0))
+    heavy = m.step(s0, 0, 0, "cloth", 8.0, auto_trim=True, phys=m.Physics(mass=500.0))
+    assert light.v > heavy.v > 0.0
+
+
+def test_rudder_drag_coefficient():
+    assert m.rudder_penalty(35, m.Physics(rudder_drag=0.5)) == pytest.approx(0.5)
+    assert m.rudder_penalty(35, m.Physics(rudder_drag=0.0)) == 1.0
+
+
+def test_hull_length_and_weather_helm_scale_yaw():
+    v, rud = 6.0, 10.0
+    r_short = m.yaw_rate_dps(v, rud, 0.0, m.Physics(hull_length=2.3))   # ölü açıda: orsaya kaçma yok
+    r_base = m.yaw_rate_dps(v, rud, 0.0)
+    assert r_short == pytest.approx(2 * r_base)
+    assert m.Physics(ce_arm=0.0).weather_helm == 0.0                     # CE = CLR: denge
+    assert m.Physics(ce_arm=0.40).weather_helm == pytest.approx(2 * m.WEATHER_HELM_DPS)
+    assert m.Physics(ce_arm=-0.1).weather_helm < 0.0                     # rüzgar altına kaçma (lee helm)
+    assert m.Physics(rudder_arm=4.2).weather_helm == pytest.approx(m.WEATHER_HELM_DPS / 2)
+
+
+@pytest.mark.parametrize("phys", [m.Physics(ce_arm=0.35), m.Physics(rudder_area=0.3, rudder_arm=1.5),
+                                  m.Physics(hull_drag=120.0, hull_length=6.0), m.Physics(sail_area=28.0, mass=400.0)])
+def test_weather_helm_consistent_with_force_balance(phys):
+    """Kinematik orsaya kaçma, her parametre setinde kuvvet modelindeki dengeleyici dümen açısıyla uyumludur."""
+    f = m.force_moment_breakdown(90, 46, 0, 8.0, phys=phys)
+    dss = np.degrees(np.arcsin(np.radians(phys.weather_helm) * phys.hull_length / f["v"]))
+    assert f["rudder_balance"] == pytest.approx(dss, rel=0.1)
+
+
+def test_force_breakdown_uses_physics():
+    phys = m.Physics(sail_area=30.0, mass=400.0, hull_drag=100.0)
+    f = m.force_moment_breakdown(90, 46, 0, 8.0, phys=phys)
+    assert f["v"] == pytest.approx(m.target_speed(90, 46, 0, "cloth", 8.0, phys=phys))
+    assert f["drive"] == pytest.approx(f["hull_drag"]) and f["hull_drag"] == pytest.approx(100.0 * f["v"])
+    g = m.force_moment_breakdown(90, 46, 0, 8.0, speed_ms=2.0, phys=phys)
+    assert g["accel"] == pytest.approx((g["v_star"] - 2.0) / phys.tau)
