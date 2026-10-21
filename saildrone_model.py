@@ -1,5 +1,6 @@
 """
 Saildrone / yelkenli katamaran fizik modeli (Streamlit'ten bağımsız, test edilebilir).
+Tek yelken modeli: Kumaş Yelken (Cambered / Klasik).
 
 Koordinat ve işaret kuralları
 -----------------------------
@@ -29,7 +30,9 @@ TAU_SURGE = 3.0             # İleri yön (surge) hız zaman sabiti (s)
 DT = 0.25                   # Varsayılan entegrasyon adımı (s)
 MS_TO_KTS = 1.94384
 
-PROFILE_KEYS = ("0012", "0015", "cloth")
+PROFILE = "cloth"           # Tek standart yelken: kumaş (cambered) yelken
+PROFILE_KEYS = (PROFILE,)
+PROFILE_NAME = "Kumaş Yelken (Cambered / Klasik)"
 
 # TWA bantları: (alt, üst] derece
 BANDS = [
@@ -42,8 +45,6 @@ BANDS = [
 
 # Her bant için (optimum bom açısı [°], hız oranı V_b / V_w)
 POLAR = {
-    "0012": [(12.0, 0.78), (28.0, 0.98), (42.0, 1.30), (62.0, 0.98), (78.0, 0.58)],
-    "0015": [(14.0, 0.74), (30.0, 0.94), (45.0, 1.25), (64.0, 1.05), (80.0, 0.65)],
     "cloth": [(16.0, 0.62), (32.0, 0.85), (46.0, 1.15), (65.0, 0.92), (82.0, 0.74)],
 }
 
@@ -51,51 +52,27 @@ POLAR = {
 #   tol: tam trim toleransı (°), loss: tolerans kenarındaki kayıp,
 #   under/over: (ölçek °, üs, taban) – fazla kasılı / fazla açık dalları.
 TRIM = {
-    "0012": dict(tol=4.0, loss=0.04, under=(20.0, 1.9, 0.08), over=(22.0, 1.9, 0.06),
-                 camber=(0.0, 0.0, 0.0), full="Tam Trim (NACA 0012 Optimum)",
-                 under_txt="Fazla Kasılı (Erken Stall)", over_txt="Fazla Açık (Kanat Nötr)"),
-    "0015": dict(tol=6.0, loss=0.04, under=(24.0, 1.7, 0.12), over=(26.0, 1.7, 0.10),
-                 camber=(0.0, 0.0, 0.0), full="Tam Trim (NACA 0015 Optimum)",
-                 under_txt="Fazla Kasılı (Stall)", over_txt="Fazla Açık (Kanat Nötr)"),
     "cloth": dict(tol=6.0, loss=0.05, under=(25.0, 1.6, 0.15), over=(30.0, 1.6, 0.10),
                   camber=(0.45, 0.18, 0.22), full="Tam Trim (Yelken Dolu / Torlu)",
                   under_txt="Fazla Kasılı (Düz / Stall)", over_txt="Fazla Açık (Yapraklama)"),
 }
 
 DESC = {
-    "0012": [
-        "NACA 0012 rijit kanat orsası. Düşük profil sürtünmesi (C_D0 ≈ 0.008) sayesinde 30°'ye kadar rüzgar üstüne dik tırmanır.",
-        "NACA 0012 akıcı hava akışıyla dar apazda yüksek itki üretir.",
-        "TAM APAZ (BEAM REACH): Rüzgar 90° bordadan gelir. NACA 0012 minimum sürtünmesiyle rekor hız oranına (1.30x) ulaşır!",
-        "GENİŞ APAZ: Rüzgar kıç omuzluktan gelir, NACA 0012 kanat dışarı boşlanır.",
-        "PUPA SEYRİ: NACA 0012 ince simetrik yapısı (%12) nedeniyle havayı yarmaya meyillidir, pupa itkisi düşüktür.",
-    ],
-    "0015": [
-        "NACA 0015 kalın kanat orsası. Kalın profil (%15) sağlam taşıma üretir ancak sürtünmesi 0012'den hafif yüksektir.",
-        "NACA 0015 dar apazda yüksek taşıma katsayısıyla (C_L) kararlı seyir sağlar.",
-        "TAM APAZ (BEAM REACH): NACA 0015 güçlü taşıma üretir, rüzgar hızını %25 aşar (1.25x).",
-        "GENİŞ APAZ: NACA 0015 yüksek stall açısı (16°) ve yüksek C_Lmax ile geniş apazda zirve yapar!",
-        "PUPA SEYRİ: NACA 0015 kalın kesiti (%15) sayesinde arkadan gelen rüzgara 0012'den daha fazla yüzey direnci gösterir.",
-    ],
     "cloth": [
         "Klasik kumaş yelken orsası. Iskotalar sonuna kadar kasılı. Kumaş esnemesi nedeniyle 30° sınırında itki düşer.",
         "Kumaş yelken orsaya göre biraz daha boşlanır, tor alanı genişler ve hız artar.",
         "TAM APAZ (BEAM REACH): Kumaş yelken tam dolu ve torludur. Rüzgar hızını %15 aşar (1.15x).",
         "GENİŞ APAZ: Kumaş yelken iyice boşlanır, rüzgar cebi oluşarak itki sağlar.",
-        "PUPA SEYRİ: Kumaş yelken rüzgarı paraşüt gibi doldurup torlayarak en yüksek itme sürüklemesini üretir.",
+        "PUPA SEYRİ: Kumaş yelken rüzgarı paraşüt gibi doldurup torlanır; itki sürükleme (drag) kuvvetinden gelir (0.74x).",
     ],
 }
 
 NO_GO_REGIME = "Ölü Açı (No-Go Zone)"
 
 
-def profile_key(profile_name):
-    """Arayüzdeki profil adını model anahtarına çevirir."""
-    if "0012" in profile_name:
-        return "0012"
-    if "0015" in profile_name:
-        return "0015"
-    return "cloth"
+def profile_key(profile_name=PROFILE_NAME):
+    """Geriye dönük uyumluluk: tek yelken modeli olduğundan her ad kumaş yelkene karşılık gelir."""
+    return PROFILE
 
 
 def wrap360(a):
@@ -132,7 +109,7 @@ def band_index(twa):
     return len(BANDS) - 1
 
 
-def polar_point(heading_deg, profile):
+def polar_point(heading_deg, profile=PROFILE):
     """(optimum bom açısı, hız oranı) – ölü açıda (0, 0)."""
     i = band_index(true_wind_angle(heading_deg))
     if i is None:
@@ -140,7 +117,12 @@ def polar_point(heading_deg, profile):
     return POLAR[profile][i]
 
 
-def analyze_points_of_sail_360(heading_deg, profile_name):
+def signed_sail_angle(heading_deg, profile=PROFILE):
+    """Auto-trim bom açısı (işaretli): + yelken sancağa, - iskeleye, ölü açıda 0."""
+    return leeward_sign(heading_deg) * polar_point(heading_deg, profile)[0]
+
+
+def analyze_points_of_sail_360(heading_deg, profile_name=PROFILE_NAME):
     """
     Seyir durumu analizi. Dönüş: (regime, opt_sail, speed_ratio, tack, wind_side, leeward_sign, desc)
     """
@@ -171,7 +153,7 @@ def analyze_points_of_sail_360(heading_deg, profile_name):
     return regime, opt_sail, ratio, tack, wind_side, lee, DESC[profile][i]
 
 
-def trim_efficiency(sail_deg, opt_deg, profile):
+def trim_efficiency(sail_deg, opt_deg, profile=PROFILE):
     """
     Bom açısı ile optimum açı farkına göre aerodinamik trim verimi.
     Dönüş: (eta, durum metni, rozet tipi, tor miktarı)

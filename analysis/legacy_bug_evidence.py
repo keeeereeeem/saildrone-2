@@ -39,26 +39,26 @@ def legacy_run(sim, **kw):
 
 def main(out=sys.stdout):
     analyze, sim = load_legacy()
-    P12, P15, PC = "NACA 0012", "NACA 0015", "Kumaş Yelken"
+    PC = "Kumaş Yelken"
     p = lambda *a: print(*a, file=out)
 
     p("## H1 – Kontra (tack) isimlendirmesi")
     for h in (45, 90, 270):
-        _, _, _, tack, side, lee, _ = analyze(h, P12)
-        _, _, _, tack2, side2, _, _ = m.analyze_points_of_sail_360(h, P12)
+        _, _, _, tack, side, lee, _ = analyze(h, PC)
+        _, _, _, tack2, side2, _, _ = m.analyze_points_of_sail_360(h, PC)
         p(f"- psi={h:3d}°: eski -> tack='{tack}', rüzgar tarafı='{side}' | yeni -> '{tack2}', '{side2}'")
 
     p("\n## H2 – İskele/sancak sınır asimetrisi (aynı TWA, farklı rejim)")
     for twa in (50, 80, 120, 150):
-        a = analyze(twa, P12)
-        b = analyze(360 - twa, P12)
+        a = analyze(twa, PC)
+        b = analyze(360 - twa, PC)
         p(f"- TWA={twa}°: psi={twa}° -> {a[0]} (oran {a[2]}) | psi={360-twa}° -> {b[0]} (oran {b[2]})")
 
     p("\n## H3 – Gösterilen hız ile gidilen yol tutarsızlığı (dümen 0, 30 s, 8 m/s)")
     p("| Profil | psi | Bom | Eski V (m/s) | Eski yol/30 s (m/s) | Fark % | Yeni V | Yeni yol/30 s |")
     p("|---|---|---|---|---|---|---|---|")
     worst = 0.0
-    for prof, key in ((P12, "0012"), (P15, "0015"), (PC, "cloth")):
+    for prof, key in ((PC, "cloth"),):
         for h in (90, 135):
             opt = m.polar_point(h, key)[0]
             for ds in (-30, -10, -5, 5, 10, 25):
@@ -75,23 +75,23 @@ def main(out=sys.stdout):
     p(f"\nEn kötü fark (eski): {worst:.1f} %")
 
     p("\n## H4 – Auto-trim dönüş sırasında yeniden trim yapmıyor (psi0=60°, dümen +20°, 20 s, 8 m/s)")
-    tel = legacy_run(sim, heading_deg=60, sail_input_deg=0, rudder_deg=20, profile_name=P12,
+    tel = legacy_run(sim, heading_deg=60, sail_input_deg=0, rudder_deg=20, profile_name=PC,
                      wind_speed_ms=8.0, sim_time_s=20.0, auto_trim=True)
-    new = m.simulate_open_loop(60, 0, 20, "0012", 8.0, 20.0, auto_trim=True, tau=0.0)
-    p(f"- Eski: yol={tel['distance_m']:.1f} m (bom 28°'de donmuş) | Yeni: yol={new['distance']:.1f} m (her adımda optimum)")
+    new = m.simulate_open_loop(60, 0, 20, "cloth", 8.0, 20.0, auto_trim=True, tau=0.0)
+    p(f"- Eski: yol={tel['distance_m']:.1f} m (bom başlangıç açısında donmuş) | Yeni: yol={new['distance']:.1f} m (her adımda optimum)")
 
     p("\n## H5 – Orsaya kaçma (weather helm) süreksizliği (psi0=90°, 60 s, 8 m/s)")
     for rud in (0.0, 1.9, 2.0):
-        tel = legacy_run(sim, heading_deg=90, sail_input_deg=42, rudder_deg=rud, profile_name=P12,
+        tel = legacy_run(sim, heading_deg=90, sail_input_deg=46, rudder_deg=rud, profile_name=PC,
                          wind_speed_ms=8.0, sim_time_s=60.0)
-        new = m.simulate_open_loop(90, 42, rud, "0012", 8.0, 60.0)
+        new = m.simulate_open_loop(90, 46, rud, "cloth", 8.0, 60.0)
         p(f"- dümen={rud:+.1f}°: eski son pruva={tel['final_cog_deg']:.1f}° | yeni son pruva={new['final_heading']:.1f}°")
 
     p("\n## H6 – Atalet yok: ölü açıdan geçiş (tack) imkânsız (psi0=40°, dümen -35°, 30 s)")
     for U in (3.0, 5.0, 8.0, 12.0):
-        tel = legacy_run(sim, heading_deg=40, sail_input_deg=12, rudder_deg=-35, profile_name=P12,
+        tel = legacy_run(sim, heading_deg=40, sail_input_deg=16, rudder_deg=-35, profile_name=PC,
                          wind_speed_ms=U, sim_time_s=30.0)
-        new = m.simulate_open_loop(40, 12, -35, "0012", U, 30.0, auto_trim=True)
+        new = m.simulate_open_loop(40, 12, -35, "cloth", U, 30.0, auto_trim=True)
         stuck_new = m.true_wind_angle(new["final_heading"]) <= m.NO_GO_DEG and new["v"][-1] < 0.05
         p(f"- U={U:4.1f} m/s: eski son pruva={tel['final_cog_deg']:.1f}° (ölü açıda kilit) | "
           f"yeni son pruva={new['final_heading']:.1f}°, "

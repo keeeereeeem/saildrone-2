@@ -1,6 +1,7 @@
 """
-Rapor deneyleri: polar/verim grafikleri, navigasyon senaryo matrisi, rota çizimleri,
-erişilebilirlik (ETA) analizi ve tack eşik analizi.
+Rapor deneyleri (tek yelken modeli: kumaş yelken): polar/verim grafikleri, navigasyon senaryo
+matrisi, rota çizimleri, ara duraklı rota ve açı takip tablosu, erişilebilirlik (ETA) analizi,
+tack eşik analizi.
 
 Çıktılar: docs/figures/*.png, docs/results/*.md|csv
 Çalıştırma:  python analysis/run_experiments.py
@@ -24,8 +25,8 @@ RES = os.path.join(ROOT, "docs", "results")
 os.makedirs(FIG, exist_ok=True)
 os.makedirs(RES, exist_ok=True)
 
-PROFILES = {"0012": "NACA 0012", "0015": "NACA 0015", "cloth": "Kumaş Yelken"}
-COLORS = {"0012": "#0284c7", "0015": "#4338ca", "cloth": "#d97706"}
+PROFILES = {"cloth": "Kumaş Yelken"}
+COLORS = {"cloth": "#d97706"}
 WINDS = [1.0, 3.0, 8.0, 15.0]
 SCENARIOS = [
     ("S1 Tam apaz (Doğu)", (0, 0), (1000, 0)),
@@ -45,19 +46,23 @@ def fig_polar():
         th = np.radians(twa)
         ax.plot(th, r, color=COLORS[k], lw=2, label=name)
         ax.plot(-th, r, color=COLORS[k], lw=2)
+    for (lo, hi, name, _), (opt, ratio) in zip(m.BANDS, m.POLAR["cloth"]):
+        mid = np.radians((lo + hi) / 2)
+        ax.text(mid, ratio + 0.15, f"{name}\n{ratio:.2f}× / δ={opt:.0f}°", fontsize=7, ha="center")
     ax.set_theta_zero_location("N")
     ax.set_theta_direction(-1)
     ax.fill_between(np.radians(np.linspace(-30, 30, 50)), 0, 1.4, color="#ef4444", alpha=0.15)
     ax.set_rlim(0, 1.4)
-    ax.set_title("Hız poları  V_b / V_w  (rüzgar kuzeyden)", pad=18)
-    ax.legend(loc="lower left", bbox_to_anchor=(-0.1, -0.1), fontsize=8)
+    ax.set_rlabel_position(200)
+    ax.set_title("Kumaş yelken hız poları  V_b / U  (rüzgar kuzeyden)", pad=18)
     fig.tight_layout()
     fig.savefig(os.path.join(FIG, "polar.png"), dpi=130)
     plt.close(fig)
 
 
 def fig_trim():
-    fig, axes = plt.subplots(1, 3, figsize=(12, 3.4), sharey=True)
+    fig, ax0 = plt.subplots(1, 1, figsize=(6.4, 3.6))
+    axes = [ax0]
     d = np.linspace(-60, 60, 481)
     for ax, (k, name) in zip(axes, PROFILES.items()):
         opt = 45.0
@@ -65,7 +70,9 @@ def fig_trim():
         ax.plot(d, eta, color=COLORS[k], lw=2)
         tol = m.TRIM[k]["tol"]
         ax.axvspan(-tol, tol, color="#22c55e", alpha=0.15)
-        ax.set_title(name)
+        ax.set_title(name + " – trim verimi")
+        ax.text(-55, 0.2, "fazla kasılı\n(düz / stall)", fontsize=8)
+        ax.text(25, 0.2, "fazla açık\n(yapraklama)", fontsize=8)
         ax.set_xlabel("δ_s − δ_opt (°)")
         ax.grid(alpha=0.3)
     axes[0].set_ylabel("Trim verimi η")
@@ -143,22 +150,22 @@ def edge_cases():
         cases.append(f"| {name} | {'EVET' if r.reached else 'HAYIR'} | {r.time:.0f} | {r.n_tacks} | {r.n_gybes} | {r.reason} |")
 
     add("Başlangıç pruvası ölü açıda (000°), hedef Doğu 1 km, 8 m/s",
-        start=(0, 0), target=(1000, 0), profile="0012", wind_ms=8.0, initial_heading=0.0)
+        start=(0, 0), target=(1000, 0), profile="cloth", wind_ms=8.0, initial_heading=0.0)
     add("Başlangıç pruvası ölü açı sınırında (032°), hedef Kuzey 1 km, 8 m/s",
-        start=(0, 0), target=(0, 1000), profile="0012", wind_ms=8.0, initial_heading=32.0)
+        start=(0, 0), target=(0, 1000), profile="cloth", wind_ms=8.0, initial_heading=32.0)
     add("Başlangıç pruvası ters yönde (180°), hedef Kuzey 1 km, 8 m/s",
-        start=(0, 0), target=(0, 1000), profile="0012", wind_ms=8.0, initial_heading=180.0)
+        start=(0, 0), target=(0, 1000), profile="cloth", wind_ms=8.0, initial_heading=180.0)
     add("Tack yasak (yalnızca gybe), hedef Kuzey 1 km, 8 m/s",
-        start=(0, 0), target=(0, 1000), profile="0012", wind_ms=8.0, cfg=nav.NavConfig(allow_tack=False))
+        start=(0, 0), target=(0, 1000), profile="cloth", wind_ms=8.0, cfg=nav.NavConfig(allow_tack=False))
     add("Tack yasak, varış yarıçapı 30 m, hedef Kuzey 1 km, 8 m/s",
-        start=(0, 0), target=(0, 1000), profile="0012", wind_ms=8.0,
+        start=(0, 0), target=(0, 1000), profile="cloth", wind_ms=8.0,
         cfg=nav.NavConfig(allow_tack=False, arrival_radius=30.0))
     add("Hafif rüzgar 2 m/s (tack fiziksel olarak imkânsız), hedef Kuzey 1 km",
-        start=(0, 0), target=(0, 1000), profile="0012", wind_ms=2.0)
-    add("Hedef başlangıçta (mesafe 0)", start=(0, 0), target=(0, 0), profile="0012", wind_ms=8.0)
+        start=(0, 0), target=(0, 1000), profile="cloth", wind_ms=2.0)
+    add("Hedef başlangıçta (mesafe 0)", start=(0, 0), target=(0, 0), profile="cloth", wind_ms=8.0)
     add("Uzun menzil: Kuzey 10 km, 5 m/s, kumaş", start=(0, 0), target=(0, 10000), profile="cloth", wind_ms=5.0,
         cfg=nav.NavConfig(max_time=6 * 3600))
-    add("Kısa süre limiti: Kuzey 1 km, 3 m/s, 300 s", start=(0, 0), target=(0, 1000), profile="0012", wind_ms=3.0,
+    add("Kısa süre limiti: Kuzey 1 km, 3 m/s, 300 s", start=(0, 0), target=(0, 1000), profile="cloth", wind_ms=3.0,
         cfg=nav.NavConfig(max_time=300))
     md = ["| Durum | Ulaştı | Süre (s) | Tack | Gybe | Sonuç |", "|---|---|---|---|---|---|"] + cases
     with open(os.path.join(RES, "edge_cases.md"), "w", encoding="utf-8") as f:
@@ -175,14 +182,14 @@ def gybe_only_sweep():
              "|---|" + "---|" * len(winds)]
     diam = []
     for U in winds:
-        v = U * m.POLAR["0012"][0][1]
+        v = U * m.POLAR["cloth"][0][1]
         w = min(np.radians(cfg0.max_turn_rate), v / m.L_HULL * np.sin(np.radians(m.RUDDER_MAX_DEG)))
         diam.append(2 * v / w)
     lines.append("| *Dönüş çapı 2R (m)* | " + " | ".join(f"*{d:.0f}*" for d in diam) + " |")
     for rad in radii:
         cells = []
         for U in winds:
-            r = nav.navigate((0, 0), (0, 1000), "0012", U,
+            r = nav.navigate((0, 0), (0, 1000), "cloth", U,
                              cfg=nav.NavConfig(allow_tack=False, arrival_radius=rad, max_time=3000))
             cells.append(f"✔ {r.time:.0f} s" if r.reached else "✘")
         lines.append(f"| {rad} | " + " | ".join(cells) + " |")
@@ -197,7 +204,7 @@ def fig_trajectories():
     for ax, (sname, st, tg) in zip(axes.ravel(), SCENARIOS):
         for k, name in PROFILES.items():
             r = nav.navigate(st, tg, k, 8.0)
-            ax.plot(r.x, r.y, color=COLORS[k], lw=1.6, label=f"{name}: {r.time:.0f} s")
+            ax.plot(r.x, r.y, color=COLORS[k], lw=1.6, label=f"{r.time:.0f} s, tack={r.n_tacks}, gybe={r.n_gybes}")
         ax.plot(*st, "ko", ms=6)
         ax.add_patch(plt.Circle(tg, 10, color="#16a34a", fill=False, lw=1.5))
         ax.plot(*tg, "*", color="#16a34a", ms=14)
@@ -215,36 +222,81 @@ def fig_trajectories():
     # Hafif rüzgar: tack yerine gybe ile kontra değiştirme
     fig, axes = plt.subplots(1, 2, figsize=(11, 6))
     for ax, U in zip(axes, (1.0, 8.0)):
-        r = nav.navigate((0, 0), (0, 1000), "0012", U)
+        r = nav.navigate((0, 0), (0, 1000), "cloth", U)
         sc = ax.scatter(r.x, r.y, c=r.v, s=3, cmap="viridis")
         fig.colorbar(sc, ax=ax, label="Hız (m/s)")
         ax.plot(0, 0, "ko")
         ax.plot(0, 1000, "*", color="#16a34a", ms=14)
-        ax.set_title(f"NACA 0012, tam rüzgar üstü, U={U:.0f} m/s\n{r.time:.0f} s, tack={r.n_tacks}, gybe={r.n_gybes}")
+        ax.set_title(f"Kumaş yelken, tam rüzgar üstü, U={U:.0f} m/s\n{r.time:.0f} s, tack={r.n_tacks}, gybe={r.n_gybes}")
         ax.set_aspect("equal", adjustable="datalim")
         ax.grid(alpha=0.3)
     fig.tight_layout()
     fig.savefig(os.path.join(FIG, "upwind_light_vs_strong.png"), dpi=120)
     plt.close(fig)
 
-    # Zaman serisi
-    r = nav.navigate((0, 0), (0, 1000), "0012", 8.0)
-    fig, axes = plt.subplots(3, 1, figsize=(10, 7), sharex=True)
-    axes[0].plot(r.t, r.psi, label="ψ")
-    axes[0].plot(r.t, r.psi_des, "--", label="ψ*")
+    # Zaman serisi: pruva, yelken, dümen, hız
+    r = nav.navigate_route([(0, 0), (0, 1000)], 8.0)
+    fig, axes = plt.subplots(4, 1, figsize=(10, 8.5), sharex=True)
+    axes[0].plot(r.t, r.psi, label="ψ (gerçekleşen)")
+    axes[0].plot(r.t, r.psi_des, "--", label="ψ* (atanan)")
     axes[0].set_ylabel("Pruva (°)")
     axes[0].legend(fontsize=8)
-    axes[1].plot(r.t, r.v, color="#16a34a")
-    axes[1].set_ylabel("Hız (m/s)")
+    axes[1].plot(r.t, r.sail, color="#2563eb")
+    axes[1].set_ylabel("Yelken δ_s (°)\n+ sancağa")
     axes[2].plot(r.t, r.rudder, color="#dc2626")
-    axes[2].set_ylabel("Dümen (°)")
-    axes[2].set_xlabel("Zaman (s)")
+    axes[2].set_ylabel("Dümen δ_r (°)")
+    axes[3].plot(r.t, r.v, color="#16a34a")
+    axes[3].set_ylabel("Hız (m/s)")
+    axes[3].set_xlabel("Zaman (s)")
     for a in axes:
         a.grid(alpha=0.3)
-    fig.suptitle("S4 tam rüzgar üstü – NACA 0012 – U = 8 m/s zaman serileri")
+    fig.suptitle("S4 tam rüzgar üstü – kumaş yelken – U = 8 m/s: pruva, yelken, dümen ve hız")
     fig.tight_layout()
     fig.savefig(os.path.join(FIG, "timeseries_S4_U8.png"), dpi=120)
     plt.close(fig)
+
+
+def _angle_rows_md(rows):
+    md = ["| # | Zaman (s) | Bacak | Olay | ψ* (°) | TWA (°) | Seyir | Kontra | δ_s (°) | δ_r manevra (°) | δ_r seyir (°) | Ort. hız (m/s) |",
+          "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for w in rows:
+        md.append(f"| {w['no']} | {w['t0']:.0f}–{w['t1']:.0f} | {w['leg']} | {w['event']} | {w['psi_des']:.1f} | "
+                  f"{w['twa']:.1f} | {w['regime']} | {w['tack']} | {w['sail']:+.0f} | {w['rudder_max']:+.1f} | "
+                  f"{w['rudder_steady']:+.1f} | {w['v_mean']:.2f} |")
+    return "\n".join(md) + "\n"
+
+
+def waypoint_route():
+    """Ara duraklı (kare) rota ve açı takip tabloları."""
+    pts = [(0, 0), (600, 0), (600, 600), (0, 600), (0, 0)]
+    r = nav.navigate_route(pts, 8.0)
+    rows = nav.angle_log(r)
+    fig, ax = plt.subplots(figsize=(7, 7))
+    sc = ax.scatter(r.x, r.y, c=r.v, s=3, cmap="viridis")
+    fig.colorbar(sc, ax=ax, label="Hız (m/s)", shrink=0.8)
+    px, py = zip(*pts)
+    ax.plot(px, py, ":", color="#64748b")
+    for i, (x, y) in enumerate(pts[1:-1], 1):
+        ax.plot(x, y, "s", color="#7c3aed", ms=8)
+        ax.text(x + 20, y + 20, str(i), color="#7c3aed", fontweight="bold")
+    ax.plot(*pts[0], "ko", ms=7)
+    ax.plot(*pts[-1], "*", color="#16a34a", ms=14)
+    for row in rows:
+        if row["event"] != "Rota düzeltme":
+            k = int(np.searchsorted(r.t, row["t0"]))
+            ax.annotate(f"#{row['no']}", (r.x[k], r.y[k]), fontsize=7, color="#b91c1c")
+    ax.set_title(f"Kare rota B→1→2→3→H (U = 8 m/s): {r.time:.0f} s, tack={r.n_tacks}, gybe={r.n_gybes}", fontsize=10)
+    ax.set_aspect("equal", adjustable="datalim")
+    ax.grid(alpha=0.3)
+    ax.annotate("", xy=(0.93, 0.80), xytext=(0.93, 0.95), xycoords="axes fraction",
+                arrowprops=dict(arrowstyle="->", color="#0369a1", lw=2))
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIG, "waypoint_square_U8.png"), dpi=120)
+    plt.close(fig)
+    with open(os.path.join(RES, "angle_log_square_U8.md"), "w", encoding="utf-8") as f:
+        f.write(_angle_rows_md(rows))
+    with open(os.path.join(RES, "angle_log_S4_U8.md"), "w", encoding="utf-8") as f:
+        f.write(_angle_rows_md(nav.angle_log(nav.navigate_route([(0, 0), (0, 1000)], 8.0))))
 
 
 def reachability():
@@ -274,7 +326,7 @@ def reachability():
     plt.close(fig)
 
     lines = ["| Kerteriz (°) | " + " | ".join(f"{PROFILES[k]} U={U:.0f}" for k in PROFILES for U in (3.0, 8.0)) + " |",
-             "|---|" + "---|" * 6]
+             "|---|" + "---|" * len(data)]
     for i, b in enumerate(bearings):
         lines.append(f"| {b:03d} | " + " | ".join(
             (f"{data[(k, U)][i]:.0f}" if np.isfinite(data[(k, U)][i]) else "—") for k in PROFILES for U in (3.0, 8.0)) + " |")
@@ -293,10 +345,11 @@ def main():
     ec = edge_cases()
     gs = gybe_only_sweep()
     fig_trajectories()
+    waypoint_route()
     ok, n = reachability()
     with open(os.path.join(RES, "summary.md"), "w", encoding="utf-8") as f:
         f.write("### VMG optimumları\n\n" + vt + "\n\n### Tack eşiği\n\n" + tt + "\n\n### Uç durumlar\n\n" + ec
-                + "\n\n### Tack yasak – varış yarıçapı duyarlılığı (NACA 0012, Kuzey 1 km)\n\n" + gs + "\n")
+                + "\n\n### Tack yasak – varış yarıçapı duyarlılığı (kumaş yelken, Kuzey 1 km)\n\n" + gs + "\n")
         f.write(f"\n### Senaryo matrisi: {sum(r['ulasti'] == 'EVET' for r in rows)}/{len(rows)} başarılı\n")
         f.write(f"\n### Erişilebilirlik: {ok}/{n} hedef başarılı\n")
     print(open(os.path.join(RES, "summary.md"), encoding="utf-8").read())

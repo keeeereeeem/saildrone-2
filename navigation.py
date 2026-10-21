@@ -17,8 +17,11 @@ Manevra: Yeni pruvaya giden en kısa dönüş ölü açıdan geçiyorsa (tack), 
          yapılır (aksi halde hedef çevresinde sonsuz döngü oluşur).
 Dümen:   İstenen dönüş hızı r* = k·e (+ orsaya kaçma ileri beslemesi); kinematik modelin
          tersinden delta = asin(r*·L / v), ±35° ile sınırlı.
+Yelken:  Auto-trim: bom her adımda optimum açıya, rüzgar altı bordaya açılır (delta_s = s_lee·delta_opt).
+Rota:    navigate_route() başlangıç → ara duraklar → hedef bacaklarını sırayla koşar; tekne her
+         bacağa bir önceki bacağın son pruvası ve hızıyla girer.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -176,10 +179,13 @@ def _predict_maneuver(s, psi_des, turn_dir, profile, wind_ms, cfg, horizon=90.0)
     return p
 
 
-def navigate(start, target, profile, wind_ms, initial_heading=None, cfg=None):
+def navigate(start, target, profile, wind_ms, initial_heading=None, cfg=None, initial_speed=None,
+             best_side=False):
     """
-    start, target: (x, y) metre. profile: '0012' | '0015' | 'cloth' (veya arayüz adı).
-    initial_heading: None ise tekne hedefe en iyi VMG pruvasıyla ve kararlı hızda başlar.
+    start, target: (x, y) metre. profile: 'cloth' (tek yelken modeli).
+    initial_heading: None ise tekne hedefe en iyi VMG pruvasıyla başlar.
+    initial_speed: None ise tekne başlangıç pruvasındaki kararlı hızla başlar.
+    best_side: True ise başlangıç pruvası verilse de en iyi VMG kontrası seçilir (ara durak dönüşü).
     """
     cfg = cfg or NavConfig()
     if profile not in m.PROFILE_KEYS:
@@ -197,10 +203,13 @@ def navigate(start, target, profile, wind_ms, initial_heading=None, cfg=None):
         psi0 = opts[side][0]
     else:
         psi0 = m.wrap360(float(initial_heading))
-        side = _side_of(psi0)
+        side = max(opts, key=lambda sd: opts[sd][1]) if best_side else _side_of(psi0)
 
     s = m.BoatState(sx, sy, psi0, 0.0)
-    s.v = m.target_speed(psi0, 0.0, 0.0, profile, wind_ms, auto_trim=True)
+    if initial_speed is None:
+        s.v = m.target_speed(psi0, 0.0, 0.0, profile, wind_ms, auto_trim=True)
+    else:
+        s.v = float(initial_speed)
 
     psi_des = psi0
     T, X, Y, P, V, R, D = [0.0], [s.x], [s.y], [s.psi], [s.v], [0.0], [psi0]
@@ -300,3 +309,143 @@ def navigate(start, target, profile, wind_ms, initial_heading=None, cfg=None):
     return NavResult(reached, reason, T[-1], path, d0, float(np.hypot(tx - s.x, ty - s.y)),
                      n_tacks, n_gybes, np.array(T), np.array(X), np.array(Y), np.array(P),
                      np.array(V), np.array(R), np.array(D))
+
+
+@dataclass
+class RouteResult(NavResult):
+    """Çok bacaklı rota sonucu: NavResult alanları + yelken açısı, bacak indeksi ve bacak özetleri."""
+    sail: np.ndarray = field(default=None, repr=False)   # işaretli bom açısı (°), + sancağa
+    leg: np.ndarray = field(default=None, repr=False)    # örneğin ait olduğu bacak (0'dan)
+    points: list = field(default_factory=list, repr=False)
+    legs: list = field(default_factory=list, repr=False)
+
+
+def navigate_route(points, wind_ms, initial_heading=None, cfg=None, profile=m.PROFILE):
+    """
+    points: [başlangıç, ara durak 1, ..., hedef] – (x, y) metre. Her bacak navigate() ile koşulur;
+    süre sınırı (cfg.max_time) tüm rota içindir. Bir bacak başarısız olursa rota orada biter.
+    """
+    cfg = cfg or NavConfig()
+    pts = [(float(x), float(y)) for x, y in points]
+    T, X, Y, P, V, R, D, G = [], [], [], [], [], [], [], []
+    legs = []
+    t0 = path = 0.0
+    n_tacks = n_gybes = 0
+    psi0, v0 = initial_heading, None
+    reached, reason = True, "Hedefe ulaşıldı"
+    for i in range(len(pts) - 1):
+        leg_cfg = replace(cfg, max_time=max(cfg.max_time - t0, cfg.dt))
+        r = navigate(pts[i], pts[i + 1], profile, wind_ms, initial_heading=psi0, cfg=leg_cfg,
+                     initial_speed=v0, best_side=i > 0)
+        k = 0 if i == 0 else 1                      # bacak başlangıç örneği önceki bacağın sonudur
+        T += list(r.t[k:] + t0)
+        X += list(r.x[k:])
+        Y += list(r.y[k:])
+        P += list(r.psi[k:])
+        V += list(r.v[k:])
+        R += list(r.rudder[k:])
+        D += list(r.psi_des[k:])
+        G += [i] * (len(r.t) - k)
+        legs.append(dict(leg=i, start=pts[i], end=pts[i + 1], reached=r.reached, time=r.time,
+                         path=r.path_length, tacks=r.n_tacks, gybes=r.n_gybes))
+        t0 += r.time
+        path += r.path_length
+        n_tacks += r.n_tacks
+        n_gybes += r.n_gybes
+        psi0, v0 = r.psi[-1], r.v[-1]
+        if not r.reached:
+            reached = False
+            reason = r.reason if len(pts) == 2 else f"{leg_name(i, len(pts))} bacağı: {r.reason}"
+            break
+    straight = float(sum(np.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:])))
+    final = float(np.hypot(pts[-1][0] - X[-1], pts[-1][1] - Y[-1]))
+    P_arr = np.array(P)
+    sail = np.array([m.signed_sail_angle(p, profile) for p in P_arr])
+    return RouteResult(reached, reason, t0, path, straight, final, n_tacks, n_gybes,
+                       np.array(T), np.array(X), np.array(Y), P_arr, np.array(V), np.array(R), np.array(D),
+                       sail=sail, leg=np.array(G), points=pts, legs=legs)
+
+
+def leg_name(i, n_points):
+    """Bacak adı: B→1, 1→2, ..., k→H (B: başlangıç, H: hedef)."""
+    a = "B" if i == 0 else str(i)
+    b = "H" if i == n_points - 2 else str(i + 1)
+    return f"{a}→{b}"
+
+
+
+
+def _maneuver_type(psi_seq):
+    """Gerçekleşen pruva dizisi kuzeyden (rüzgarın geldiği yön) geçtiyse Tack, güneyden geçtiyse Gybe."""
+    u = np.degrees(np.unwrap(np.radians(np.asarray(psi_seq, dtype=float))))
+    lo, hi = u.min(), u.max()
+    if np.floor(hi / 360.0) != np.floor(lo / 360.0):
+        return "Tack"
+    if np.floor((hi - 180.0) / 360.0) != np.floor((lo - 180.0) / 360.0):
+        return "Gybe"
+    return None
+
+
+def angle_log(res, split_deg=10.0, min_duration=4.0):
+    """
+    Açı takip tablosu: rota, sistemin atadığı hedef pruvanın (ψ*) sabit kaldığı bölümlere ayrılır.
+    Yeni satır: bacak değişimi, kontra değişimi (ψ* rüzgarın öbür tarafına geçti) ya da ψ*'ın
+    bölüm başındaki değerinden split_deg'den fazla sapması; min_duration'dan kısa bölümler bir
+    öncekine katılır. Her satır, bölümde atanan pruva / yelken açısını, manevra sırasındaki en büyük
+    dümen açısını ve manevra sonrası sabit seyirdeki ortalama dümen açısını verir.
+    """
+    n = len(res.t)
+    if n < 2:
+        return []
+    starts = [0]
+    for k in range(1, n):
+        a = starts[-1]
+        if (res.leg[k] != res.leg[a] or _side_of(res.psi_des[k]) != _side_of(res.psi_des[a])
+                or abs(m.wrap180(res.psi_des[k] - res.psi_des[a])) > split_deg):
+            starts.append(k)
+    kept = [0]
+    for j in range(1, len(starts)):
+        end = starts[j + 1] if j + 1 < len(starts) else n - 1
+        if res.leg[starts[j]] != res.leg[kept[-1]] or res.t[end] - res.t[starts[j]] >= min_duration:
+            kept.append(starts[j])
+    n_points = len(res.points)
+    rows = []
+    for j, a in enumerate(kept):
+        last = j + 1 == len(kept)
+        b = n if last else kept[j + 1]                # bölüm örnekleri: [a, b)
+        psi_des = float(res.psi_des[min(a + 1, n - 1)])
+        # Manevra penceresi: pruva atanan pruvaya 5° yaklaşana kadar
+        err = np.abs([m.wrap180(psi_des - p) for p in res.psi[a:b]])
+        settled = np.nonzero(err < 5.0)[0]
+        mv_end = a + (int(settled[0]) if settled.size else b - a - 1)
+        maneuver = _maneuver_type(res.psi[max(a - 1, 0):mv_end + 1]) if mv_end > a else None
+        if maneuver is None and a > 0 and res.sail[a - 1] * m.signed_sail_angle(psi_des) < 0:
+            maneuver = "Gybe"                         # tam pupadan bom karşı bordaya geçti
+        if j == 0:
+            event = "Başlangıç"
+        elif res.leg[a] != res.leg[kept[j - 1]]:
+            event = f"Ara durak {res.leg[a]} ✓"
+        else:
+            event = maneuver or "Rota düzeltme"
+        rud_mv = res.rudder[a:mv_end + 1]
+        k_max = int(np.argmax(np.abs(rud_mv)))
+        steady = slice(mv_end, b) if b - mv_end > 1 else slice(b - 1, b)
+        psi_st = np.radians(res.psi[steady])
+        i_band = m.band_index(m.true_wind_angle(psi_des))
+        rows.append(dict(
+            no=j + 1,
+            t0=float(res.t[a]), t1=float(res.t[b - 1]),
+            leg=leg_name(int(res.leg[a]), n_points),
+            event=event,
+            maneuver=maneuver or "—",
+            psi_des=psi_des,
+            twa=float(m.true_wind_angle(psi_des)),
+            regime=m.BANDS[i_band][2] if i_band is not None else "Ölü açı",
+            tack="İskele" if _side_of(psi_des) == 1 else "Sancak",
+            sail=float(m.signed_sail_angle(psi_des)),
+            rudder_max=float(rud_mv[k_max]),
+            rudder_steady=float(np.mean(res.rudder[steady])),
+            psi_mean=float(m.wrap360(np.degrees(np.arctan2(np.mean(np.sin(psi_st)), np.mean(np.cos(psi_st)))))),
+            v_mean=float(np.mean(res.v[a:b])),
+        ))
+    return rows

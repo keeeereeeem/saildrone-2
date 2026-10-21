@@ -1,5 +1,11 @@
+import hashlib
+import json
+import os
+
 import streamlit as st
+import streamlit.components.v1 as components
 import numpy as np
+import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -131,17 +137,15 @@ def sync_input(label, key_prefix, min_val, max_val, default_val, step=1, help_te
 analyze_points_of_sail_360 = sm.analyze_points_of_sail_360
 
 # --- SİMÜLASYON VE ÇİZİM ÇEKİRDEĞİ ---
-def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, profile_name, wind_speed_ms, sim_time_s, auto_trim=False):
+def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, sim_time_s, auto_trim=False):
     """
-    330°-030° Ölü Açı sektörü, NACA 0012 / NACA 0015 / Kumaş Yelken fiziksel polarları,
-    ters işleyen dümen kinematiği ve merkezi katamaran görselleştirmesi.
+    330°-030° Ölü Açı sektörü, kumaş yelken poları, dümen kinematiği ve merkezi katamaran
+    görselleştirmesi (tek yelken modeli: Kumaş Yelken – Cambered / Klasik).
     """
-    profile = sm.profile_key(profile_name)
-    is_12 = profile == "0012"
-    is_cloth = profile == "cloth"
+    profile = sm.PROFILE
 
     # 1. BAŞLANGIÇ SEYİR DURUMU (360 Derece Analiz):
-    regime, opt_sail, max_speed_ratio, tack, wind_side, leeward_sign, desc = sm.analyze_points_of_sail_360(heading_deg, profile_name)
+    regime, opt_sail, max_speed_ratio, tack, wind_side, leeward_sign, desc = sm.analyze_points_of_sail_360(heading_deg)
     is_in_irons = (regime == sm.NO_GO_REGIME)
 
     # Otomatik trim seçeneği veya kullanıcının ayarı
@@ -150,7 +154,7 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, profile_name, wi
     else:
         sail_boom_angle = abs(sail_input_deg)
 
-    # 2. YELKEN / KANAT TRİM VE AERODİNAMİK VERİM DEĞERLENDİRMESİ:
+    # 2. YELKEN TRİM VE AERODİNAMİK VERİM DEĞERLENDİRMESİ:
     if is_in_irons:
         trim_efficiency, trim_status, badge_type, camber_amount = 0.0, "Yelken Dolmuyor (Yapraklıyor)", "badge-dead", 0.0
     else:
@@ -273,83 +277,45 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, profile_name, wi
         ax.plot([hinge_w[0], tip_w[0]], [hinge_w[1], tip_w[1]], color='#dc2626', lw=3.8, solid_capstyle='round', zorder=8)
         ax.plot(hinge_w[0], hinge_w[1], 'o', color='#991b1b', markersize=4, zorder=9)
 
-    # 7. YELKEN / KANAT GEOMETRİSİ:
+    # 7. KUMAŞ YELKEN GEOMETRİSİ:
     boom_len = 2.85
     actual_sail_rot = leeward_sign * np.radians(sail_boom_angle)
     u_chord = np.array([np.sin(actual_sail_rot), -np.cos(actual_sail_rot)])
-    u_norm = np.array([np.cos(actual_sail_rot), np.sin(actual_sail_rot)])
 
     tip_lx = boom_len * u_chord[0]
     tip_ly = 0.2 + boom_len * u_chord[1]
     tip_w = rot(tip_lx, tip_ly)
 
     if is_in_irons:
-        if is_cloth:
-            num_w = 20
-            wt = np.linspace(0, 1, num_w)
-            wave_lx = wt * tip_lx + 0.15 * np.sin(4 * np.pi * wt)
-            wave_ly = 0.2 + wt * (tip_ly - 0.2)
-            wave_pts = [rot(lx, ly) for lx, ly in zip(wave_lx, wave_ly)]
-            ax.plot([p[0] for p in wave_pts], [p[1] for p in wave_pts], color='#ef4444', linestyle='--', lw=2.2, zorder=9)
-            ax.text(tip_w[0], tip_w[1] - 0.3, "Yapraklıyor\n(Dolmuyor)", fontsize=7.8, color='#b91c1c', 
-                    fontweight='bold', ha='center', zorder=11)
-        else:
-            # Kanat rüzgar içine firar eder (feathers / nötr kanat)
-            ax.plot([mast_w[0], tip_w[0]], [mast_w[1], tip_w[1]], color='#ef4444', linestyle='--', lw=2.2, zorder=9)
-            ax.text(tip_w[0], tip_w[1] - 0.3, "Kanat Nötr\n(Taşıma Yok)", fontsize=7.8, color='#b91c1c', 
-                    fontweight='bold', ha='center', zorder=11)
+        num_w = 20
+        wt = np.linspace(0, 1, num_w)
+        wave_lx = wt * tip_lx + 0.15 * np.sin(4 * np.pi * wt)
+        wave_ly = 0.2 + wt * (tip_ly - 0.2)
+        wave_pts = [rot(lx, ly) for lx, ly in zip(wave_lx, wave_ly)]
+        ax.plot([p[0] for p in wave_pts], [p[1] for p in wave_pts], color='#ef4444', linestyle='--', lw=2.2, zorder=9)
+        ax.text(tip_w[0], tip_w[1] - 0.3, "Yapraklıyor\n(Dolmuyor)", fontsize=7.8, color='#b91c1c',
+                fontweight='bold', ha='center', zorder=11)
     else:
-        if is_cloth:
-            # Kumaş yelken: Torlu eğri
-            s_t = np.linspace(0, 1, 25)
-            b_dx = tip_lx - 0.0
-            b_dy = tip_ly - 0.2
-            b_len = np.hypot(b_dx, b_dy)
-            norm_x = -b_dy / b_len * leeward_sign
-            norm_y =  b_dx / b_len * leeward_sign
+        # Kumaş yelken: bom hattı + rüzgar altına doğru torlanan eğri
+        s_t = np.linspace(0, 1, 25)
+        b_dx = tip_lx - 0.0
+        b_dy = tip_ly - 0.2
+        b_len = np.hypot(b_dx, b_dy)
+        norm_x = -b_dy / b_len * leeward_sign
+        norm_y =  b_dx / b_len * leeward_sign
 
-            camber_disp = camber_amount * np.sin(np.pi * s_t)
-            curve_lx = s_t * b_dx + camber_disp * norm_x
-            curve_ly = 0.2 + s_t * b_dy + camber_disp * norm_y
+        camber_disp = camber_amount * np.sin(np.pi * s_t)
+        curve_lx = s_t * b_dx + camber_disp * norm_x
+        curve_ly = 0.2 + s_t * b_dy + camber_disp * norm_y
 
-            curve_w = [rot(lx, ly) for lx, ly in zip(curve_lx, curve_ly)]
-            cx_w = [p[0] for p in curve_w]
-            cy_w = [p[1] for p in curve_w]
+        curve_w = [rot(lx, ly) for lx, ly in zip(curve_lx, curve_ly)]
+        cx_w = [p[0] for p in curve_w]
+        cy_w = [p[1] for p in curve_w]
 
-            ax.plot([mast_w[0], tip_w[0]], [mast_w[1], tip_w[1]], color='#475569', lw=2.2, zorder=8)
-            ax.plot(cx_w, cy_w, color='#2563eb', lw=3.8, solid_capstyle='round', zorder=9)
-            fill_poly_w = [mast_w] + curve_w + [tip_w]
-            ax.add_patch(patches.Polygon(fill_poly_w, closed=True, facecolor='#2563eb', alpha=0.22, zorder=7))
-        else:
-            # NACA 0012 veya NACA 0015 Rijit Kanat Profili
-            t_ratio = 0.12 if is_12 else 0.15
-            n_pts = 40
-            x_norm = np.linspace(0, 1, n_pts)
-            yt = 5.0 * t_ratio * (
-                0.2969 * np.sqrt(x_norm) - 0.1260 * x_norm - 0.3516 * (x_norm**2) + 0.2843 * (x_norm**3) - 0.1036 * (x_norm**4)
-            ) * boom_len
-
-            upper_lx = [x_i * boom_len * u_chord[0] + y_i * u_norm[0] for x_i, y_i in zip(x_norm, yt)]
-            upper_ly = [0.2 + x_i * boom_len * u_chord[1] + y_i * u_norm[1] for x_i, y_i in zip(x_norm, yt)]
-            lower_lx = [x_i * boom_len * u_chord[0] - y_i * u_norm[0] for x_i, y_i in zip(x_norm[::-1], yt[::-1])]
-            lower_ly = [0.2 + x_i * boom_len * u_chord[1] - y_i * u_norm[1] for x_i, y_i in zip(x_norm[::-1], yt[::-1])]
-
-            poly_lx = upper_lx + lower_lx
-            poly_ly = upper_ly + lower_ly
-            poly_w = [rot(lx, ly) for lx, ly in zip(poly_lx, poly_ly)]
-
-            foil_color = '#0284c7' if is_12 else '#4338ca'
-            foil_edge = '#0369a1' if is_12 else '#312e81'
-
-            ax.add_patch(patches.Polygon(poly_w, closed=True, facecolor=foil_color, edgecolor=foil_edge, lw=2.0, alpha=0.6, zorder=9))
-            ax.plot([mast_w[0], tip_w[0]], [mast_w[1], tip_w[1]], color='#0f172a', lw=1.8, linestyle='-', zorder=10)
-
-            # Aerodinamik kaburga / istasyon çizgileri (Ribs)
-            for frac in [0.25, 0.50, 0.75]:
-                idx = int(frac * (n_pts - 1))
-                p_up = rot(upper_lx[idx], upper_ly[idx])
-                p_dn = rot(lower_lx[-(idx+1)], lower_ly[-(idx+1)])
-                ax.plot([p_up[0], p_dn[0]], [p_up[1], p_dn[1]], color='#0f172a', lw=1.0, alpha=0.7, zorder=10)
+        ax.plot([mast_w[0], tip_w[0]], [mast_w[1], tip_w[1]], color='#475569', lw=2.2, zorder=8)
+        ax.plot(cx_w, cy_w, color='#2563eb', lw=3.8, solid_capstyle='round', zorder=9)
+        fill_poly_w = [mast_w] + curve_w + [tip_w]
+        ax.add_patch(patches.Polygon(fill_poly_w, closed=True, facecolor='#2563eb', alpha=0.22, zorder=7))
 
     # 8. TEKNENİN GİTTİĞİ DOĞRULTU VE SİMÜLASYON YOLU:
     if total_distance_m > 1.0 and not is_in_irons:
@@ -426,14 +392,13 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, profile_name, wi
         "final_cog_deg": final_cog_deg,
         "rudder_info": rudder_info,
         "rudder_deg": rudder_clamped,
-        "profile_name": profile_name
     }
 
     return fig, telemetry
 
 # --- STREAMLIT ARAYÜZÜ ---
 st.markdown("## ⛵ Otonom Yelkenli Katamaran ve Saildrone Simülatörü")
-st.caption("360° Pusula Seyirleri • 330°-030° Ölü Açı • NACA 0012 / 0015 / Kumaş Yelken Aerodinamik Polarları • Realist Dümen")
+st.caption("360° Pusula Seyirleri • 330°-030° Ölü Açı • Kumaş Yelken (Cambered / Klasik) Polar Modeli • Realist Dümen")
 
 tab_free, tab_nav = st.tabs(["⛵ Serbest Seyir", "🎯 Hedefe Navigasyon"])
 
@@ -443,13 +408,8 @@ with tab_free:
     with col_ctrl:
         st.markdown("### ⚙️ Kontrol Paneli")
     
-        # 1. Yelken Profili
-        naca_profile = st.selectbox(
-            "Yelken / Kanat Profili",
-            ["NACA 0012 (Sert Kanat / İnce Simetrik)", "NACA 0015 (Sert Kanat / Kalın Profil)", "Kumaş Yelken (Cambered / Klasik)"],
-            index=0,
-            help="NACA 0012: İnce simetrik (%12), orsa ve tam apazda en hızlı (1.30x). NACA 0015: Kalın profil (%15), geniş apazda zirve (1.05x). Kumaş Yelken: Esnek torlu, pupa seyrinde en yüksek itki (0.74x)."
-        )
+        # 1. Yelken modeli (tek standart)
+        st.markdown(f"<span class='badge-full'>⛵ Yelken modeli: {sm.PROFILE_NAME}</span>", unsafe_allow_html=True)
 
         # 2. Tekne Yönü (0 - 360°)
         boat_heading_val = sync_input(
@@ -470,13 +430,13 @@ with tab_free:
                 key_prefix="sail",
                 min_val=0,
                 max_val=90,
-                default_val=42 if "0012" in naca_profile else (45 if "0015" in naca_profile else 46),
+                default_val=46,
                 step=1,
-                help_text="Iskota/Kanat trimi: Bomun orta hattan açısı (0°: Kasılı, 12°-16°: Orsa, 42°-46°: Tam Apaz, 62°-65°: Geniş Apaz, 78°-82°: Pupa)."
+                help_text="Iskota trimi: Bomun orta hattan açısı (0°: Kasılı, 16°: Orsa, 32°: Dar Apaz, 46°: Tam Apaz, 65°: Geniş Apaz, 82°: Pupa)."
             )
         with col_s2:
             st.markdown("<div style='height:22px;'></div>", unsafe_allow_html=True)
-            auto_trim_active = st.checkbox("🤖 Auto-Trim", value=False, help="Saildrone otomatik trim modu: Seçili kanat profiline ve anlık rüzgar açısına göre en ideal trim açısına otomatik ayarlar.")
+            auto_trim_active = st.checkbox("🤖 Auto-Trim", value=False, help="Otomatik trim: Bom açısını anlık rüzgar açısına göre kumaş yelkenin optimum açısına ayarlar.")
 
         # 4. Dümen Açısı (Realist ±35°)
         rudder_angle_val = sync_input(
@@ -514,44 +474,22 @@ with tab_free:
         st.markdown("---")
         st.info("💡 **Girdi Kolaylığı:** Değerleri ister kaydırıcıyla sürükleyin, ister yanındaki kutucuğa tıklayıp klavyeden doğrudan yazın.")
 
-        with st.expander("📚 Profil Karşılaştırma & Aerodinamik Tablosu"):
+        with st.expander("📚 Kumaş Yelken Polar Tablosu"):
             st.markdown("""
             <table class="polar-table">
                 <thead>
-                    <tr>
-                        <th>Profil</th>
-                        <th>Orsa (35°)</th>
-                        <th>Tam Apaz (90°)</th>
-                        <th>Geniş Apaz (135°)</th>
-                        <th>Pupa (180°)</th>
-                    </tr>
+                    <tr><th>TWA</th><th>Seyir</th><th>Optimum bom δ_opt</th><th>Hız oranı V_b/U</th></tr>
                 </thead>
                 <tbody>
-                    <tr>
-                        <td><b>NACA 0012</b></td>
-                        <td style="color:#16a34a;"><b>0.78x (Zirve)</b></td>
-                        <td style="color:#16a34a;"><b>1.30x (Zirve)</b></td>
-                        <td>0.98x</td>
-                        <td>0.58x</td>
-                    </tr>
-                    <tr>
-                        <td><b>NACA 0015</b></td>
-                        <td>0.74x</td>
-                        <td>1.25x</td>
-                        <td style="color:#16a34a;"><b>1.05x (Zirve)</b></td>
-                        <td>0.65x</td>
-                    </tr>
-                    <tr>
-                        <td><b>Kumaş Yelken</b></td>
-                        <td>0.62x</td>
-                        <td>1.15x</td>
-                        <td>0.92x</td>
-                        <td style="color:#16a34a;"><b>0.74x (Zirve)</b></td>
-                    </tr>
+                    <tr><td><b>30°–50°</b></td><td>Orsa</td><td>16°</td><td>0.62x</td></tr>
+                    <tr><td><b>50°–80°</b></td><td>Dar Apaz</td><td>32°</td><td>0.85x</td></tr>
+                    <tr><td><b>80°–120°</b></td><td>Tam Apaz</td><td>46°</td><td>1.15x</td></tr>
+                    <tr><td><b>120°–150°</b></td><td>Geniş Apaz</td><td>65°</td><td>0.92x</td></tr>
+                    <tr><td><b>150°–180°</b></td><td>Pupa</td><td>82°</td><td>0.74x</td></tr>
                 </tbody>
             </table>
             <div style="font-size:0.75rem; color:#64748b; margin-top:5px;">
-            * Ölü Açı: 330° - 030° (60° No-Go Zone). Tüm hızlar rüzgar hızının katı (V_b / V_w) olarak hesaplanır.
+            * Ölü Açı: 330° - 030° (TWA ≤ 30°): itki yok. Hız = U × oran × trim verimi × dümen cezası.
             </div>
             """, unsafe_allow_html=True)
 
@@ -562,7 +500,6 @@ with tab_free:
             heading_deg=boat_heading_val,
             sail_input_deg=sail_angle_val,
             rudder_deg=rudder_angle_val,
-            profile_name=naca_profile,
             wind_speed_ms=float(wind_speed_val),
             sim_time_s=float(sim_time_val),
             auto_trim=auto_trim_active
@@ -612,60 +549,180 @@ with tab_free:
         st.markdown(f"**ℹ️ Seyir & Aerodinamik Durumu:** {tel['regime_desc']}")
 
 
-# --- HEDEFE NAVİGASYON SEKMESİ ---
-def draw_navigation(res, start, target, arrival_radius):
-    fig, ax = plt.subplots(figsize=(7.8, 7.0), dpi=110)
-    sc = ax.scatter(res.x, res.y, c=res.v, s=4, cmap="viridis", zorder=3)
-    fig.colorbar(sc, ax=ax, label="Tekne hızı (m/s)", shrink=0.8)
-    ax.plot(*start, "o", color="#0f172a", ms=8, zorder=4, label="Başlangıç")
-    ax.plot(*target, "*", color="#16a34a", ms=16, zorder=4, label="Hedef")
-    ax.add_patch(plt.Circle(target, arrival_radius, color="#16a34a", fill=False, lw=1.5, zorder=4))
-    ax.plot([start[0], target[0]], [start[1], target[1]], ":", color="#64748b", lw=1, zorder=2)
-    ax.annotate("", xy=(0.92, 0.80), xytext=(0.92, 0.95), xycoords="axes fraction",
-                arrowprops=dict(arrowstyle="->", color="#0369a1", lw=2.5))
-    ax.text(0.92, 0.97, "Rüzgar", transform=ax.transAxes, ha="center", fontsize=8, color="#0369a1")
-    ax.set_aspect("equal", adjustable="datalim")
-    ax.grid(True, linestyle=":", alpha=0.5)
-    ax.set_xlabel("Doğu (m)")
-    ax.set_ylabel("Kuzey (m)")
-    ax.legend(loc="lower left", fontsize=8)
-    plt.tight_layout()
-    return fig
 
+# --- HEDEFE NAVİGASYON SEKMESİ ---
+# Harita (sürükle-bırak, ara durak), hızlandırılmış oynatma, canlı göstergeler ve açı takip tablosu
+# tek bir özel bileşende (components/nav_player/index.html) çizilir; rota Python'da hesaplanır.
+_nav_player = components.declare_component(
+    "nav_player", path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "components", "nav_player"))
+
+COORD_LIM = 10000
+NAV_DEFAULTS = {"nav_wind": 8, "nav_sx": 0, "nav_sy": 0, "nav_tx": 0, "nav_ty": 1000,
+                "nav_h0": 90, "nav_r": 10, "nav_T": 7200}
+ROUTE_SHAPES = ["Kare", "Üçgen", "Altıgen", "Daire (12 nokta)", "Yay (yarım daire)"]
+
+
+def set_sync(key_prefix, val):
+    """sync_input ile oluşturulan kaydırıcı + kutucuk çiftine değer yazar (widget'lar oluşmadan önce)."""
+    st.session_state[f"{key_prefix}_slider"] = val
+    st.session_state[f"{key_prefix}_num"] = val
+
+
+def clamp_coord(v):
+    return int(max(-COORD_LIM, min(COORD_LIM, round(float(v)))))
+
+
+def set_waypoints(wps):
+    st.session_state["nav_wps"] = [[clamp_coord(x), clamp_coord(y)] for x, y in wps]
+    st.session_state["nav_wp_ver"] += 1        # tablo düzenleyicisini yeni listeyle yeniden kur
+
+
+def apply_map_edit(val):
+    """Haritada sürüklenen / eklenen / silinen noktaları girdi kutularına ve ara durak listesine yazar."""
+    set_sync("nav_sx", clamp_coord(val["start"][0]))
+    set_sync("nav_sy", clamp_coord(val["start"][1]))
+    set_sync("nav_tx", clamp_coord(val["target"][0]))
+    set_sync("nav_ty", clamp_coord(val["target"][1]))
+    set_waypoints(val["waypoints"])
+    st.session_state["nav_map_token"] = val["token"]
+
+
+def apply_shape():
+    """Başlangıç noktasından başlayan hazır rota şablonu (ara duraklar + hedef) üretir."""
+    shape, L = st.session_state["nav_shape"], float(st.session_state["nav_shape_size"])
+    sx, sy = st.session_state["nav_sx_slider"], st.session_state["nav_sy_slider"]
+    if shape == "Kare":
+        pts = [(sx + L, sy), (sx + L, sy + L), (sx, sy + L), (sx, sy)]
+    elif shape == "Üçgen":
+        pts = [(sx + L, sy), (sx + L / 2, sy + L * np.sqrt(3) / 2), (sx, sy)]
+    elif shape == "Yay (yarım daire)":
+        # merkez (sx, sy + L), başlangıç güneyde; doğu tarafından kuzeydeki uca yarım daire
+        pts = [(sx + L * np.cos(np.radians(a)), sy + L + L * np.sin(np.radians(a))) for a in range(-60, 91, 30)]
+    else:
+        n = 6 if shape == "Altıgen" else 12
+        # çokgen / daire: köşelerden biri başlangıç, merkez başlangıcın L kadar kuzeyinde, saat yönü tersine
+        pts = [(sx + L * np.cos(np.radians(-90 + 360 * k / n)), sy + L + L * np.sin(np.radians(-90 + 360 * k / n)))
+               for k in range(1, n)] + [(sx, sy)]
+    set_waypoints(pts[:-1])
+    set_sync("nav_tx", clamp_coord(pts[-1][0]))
+    set_sync("nav_ty", clamp_coord(pts[-1][1]))
+
+
+def clear_waypoints():
+    set_waypoints([])
+
+
+def new_test():
+    st.session_state["nav_test_no"] += 1
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def run_route(points, wind_ms, init_heading, arrival_radius, max_time, allow_tack):
+    cfg = nav.NavConfig(arrival_radius=arrival_radius, max_time=max_time, allow_tack=allow_tack)
+    res = nav.navigate_route(list(points), wind_ms, initial_heading=init_heading, cfg=cfg)
+    return res, nav.angle_log(res)
+
+
+def route_payload(res, max_samples=3000):
+    """Oynatıcıya gönderilecek (seyreltilmiş) zaman serileri."""
+    n = len(res.t)
+    idx = np.arange(0, n, max(1, int(np.ceil(n / max_samples))))
+    if idx[-1] != n - 1:
+        idx = np.append(idx, n - 1)
+
+    def r(a, d):
+        return [round(float(v), d) for v in np.asarray(a)[idx]]
+
+    return dict(t=r(res.t, 2), x=r(res.x, 2), y=r(res.y, 2), psi=r(res.psi, 2), psi_des=r(res.psi_des, 2),
+                v=r(res.v, 3), rudder=r(res.rudder, 2), sail=r(res.sail, 1), leg=[int(v) for v in res.leg[idx]])
+
+
+ANGLE_COLUMNS = {
+    "no": "#", "t0": "Başlangıç (s)", "t1": "Bitiş (s)", "leg": "Bacak", "event": "Olay",
+    "psi_des": "Atanan pruva ψ* (°)", "twa": "TWA (°)", "regime": "Seyir", "tack": "Kontra",
+    "sail": "Yelken δs (°, + sancak)", "rudder_max": "Dümen δr maks (°)", "rudder_steady": "Dümen δr seyir (°)",
+    "psi_mean": "Gerçekleşen ψ (°)", "v_mean": "Ort. hız (m/s)",
+}
 
 with tab_nav:
+    for _k, _v in NAV_DEFAULTS.items():
+        if f"{_k}_slider" not in st.session_state:
+            set_sync(_k, _v)
+    for _k, _v in (("nav_wps", []), ("nav_wp_ver", 0), ("nav_test_no", 1), ("nav_map_token", None)):
+        st.session_state.setdefault(_k, _v)
+
+    # Haritada yapılan son düzenleme (bileşen değeri) widget'lar oluşturulmadan önce uygulanır
+    _edit = st.session_state.pop("nav_pending_edit", None) or st.session_state.get("nav_player")
+    if isinstance(_edit, dict) and _edit.get("token") and _edit["token"] != st.session_state["nav_map_token"]:
+        apply_map_edit(_edit)
+
     nc1, nc2 = st.columns([1.1, 2.0], gap="large")
     with nc1:
         st.markdown("### 🎯 Görev Tanımı")
-        nav_profile = st.selectbox(
-            "Yelken / Kanat Profili ",
-            ["NACA 0012 (Sert Kanat / İnce Simetrik)", "NACA 0015 (Sert Kanat / Kalın Profil)", "Kumaş Yelken (Cambered / Klasik)"],
-            index=0, key="nav_profile")
-        nav_wind = st.number_input("💨 Rüzgar hızı (m/s, kuzeyden)", 0.5, 25.0, 8.0, 0.5, key="nav_wind")
-        a1, a2 = st.columns(2)
-        sx = a1.number_input("Başlangıç X / Doğu (m)", -20000.0, 20000.0, 0.0, 50.0, key="nav_sx")
-        sy = a2.number_input("Başlangıç Y / Kuzey (m)", -20000.0, 20000.0, 0.0, 50.0, key="nav_sy")
-        b1, b2 = st.columns(2)
-        tx = b1.number_input("Hedef X / Doğu (m)", -20000.0, 20000.0, 0.0, 50.0, key="nav_tx")
-        ty = b2.number_input("Hedef Y / Kuzey (m)", -20000.0, 20000.0, 1000.0, 50.0, key="nav_ty")
+        st.markdown(f"<span class='badge-full'>⛵ Yelken modeli: {sm.PROFILE_NAME}</span>", unsafe_allow_html=True)
+        nav_wind = sync_input("💨 Sabit Rüzgar Hızı (m/s, kuzeyden)", "nav_wind", 1, 25, 8,
+                              help_text="Rüzgar her zaman kuzeyden (000°) eser; testler arasında yalnızca hız değişir.")
+        sx = sync_input("📍 Başlangıç X / Doğu (m)", "nav_sx", -COORD_LIM, COORD_LIM, 0)
+        sy = sync_input("📍 Başlangıç Y / Kuzey (m)", "nav_sy", -COORD_LIM, COORD_LIM, 0)
+        tx = sync_input("🏁 Hedef X / Doğu (m)", "nav_tx", -COORD_LIM, COORD_LIM, 0)
+        ty = sync_input("🏁 Hedef Y / Kuzey (m)", "nav_ty", -COORD_LIM, COORD_LIM, 1000)
+
+        with st.expander(f"🧭 Ara Duraklar (waypoints): {len(st.session_state['nav_wps'])}", expanded=True):
+            st.caption("Haritada çift tıklayarak veya ➕ ile ekleyin, sürükleyerek taşıyın; ya da tabloya yazın.")
+            _wps = st.session_state["nav_wps"]
+            _df = pd.DataFrame(_wps, columns=["X / Doğu (m)", "Y / Kuzey (m)"], dtype=float)
+            _edited = st.data_editor(
+                _df, key=f"nav_wp_editor_{st.session_state['nav_wp_ver']}", num_rows="dynamic",
+                hide_index=True, width="stretch",
+                column_config={c: st.column_config.NumberColumn(c, min_value=-COORD_LIM, max_value=COORD_LIM, step=10, format="%d")
+                               for c in _df.columns})
+            _new = [[clamp_coord(x), clamp_coord(y)] for x, y in _edited.dropna().itertuples(index=False)]
+            if _new != _wps:
+                set_waypoints(_new)
+            w1, w2 = st.columns([1.6, 1])
+            w1.selectbox("Hazır rota şablonu", ROUTE_SHAPES, key="nav_shape",
+                         help="Başlangıç noktasından başlayıp (çokgen/daire için) başlangıca dönen rota üretir.")
+            w2.number_input("Boyut (m)", 100, 5000, 500, 50, key="nav_shape_size")
+            b1, b2 = st.columns(2)
+            b1.button("✏️ Şablonu uygula", on_click=apply_shape, width="stretch")
+            b2.button("🗑️ Durakları temizle", on_click=clear_waypoints, width="stretch")
+        wps = st.session_state["nav_wps"]
+
+        st.markdown("**⚙️ Görev Ayarları**")
         auto_h = st.checkbox("Başlangıç pruvasını otomatik seç (en iyi VMG)", value=True, key="nav_auto_h")
-        init_h = None if auto_h else st.number_input("Başlangıç pruvası (°)", 0.0, 359.9, 90.0, 1.0, key="nav_h0")
-        c1_, c2_ = st.columns(2)
-        arr_r = c1_.number_input("Varış yarıçapı (m)", 2.0, 500.0, 10.0, 1.0, key="nav_r")
-        max_t = c2_.number_input("Süre sınırı (s)", 60.0, 86400.0, 7200.0, 60.0, key="nav_T")
+        init_h = None if auto_h else float(sync_input("Başlangıç pruvası ψ₀ (°)", "nav_h0", 0, 359, 90))
+        arr_r = sync_input("🎯 Varış yarıçapı (m)", "nav_r", 2, 100, 10)
+        max_t = sync_input("⏱️ Süre sınırı (s)", "nav_T", 60, 14400, 7200, step=60)
         allow_tack = st.checkbox("Tack'e izin ver (ölü açıdan geçiş)", value=True, key="nav_tack")
+        st.button("🔄 Yeni Test Başlat (tabloyu sıfırla)", on_click=new_test, type="primary", width="stretch")
 
     with nc2:
-        st.markdown("### 🗺️ Rota ve Sonuç")
-        cfg = nav.NavConfig(arrival_radius=float(arr_r), max_time=float(max_t), allow_tack=allow_tack)
-        res = nav.navigate((sx, sy), (tx, ty), nav_profile, float(nav_wind), initial_heading=init_h, cfg=cfg)
-        st.pyplot(draw_navigation(res, (sx, sy), (tx, ty), float(arr_r)), width='stretch')
+        st.markdown("### 🗺️ Rota, Oynatma ve Açı Takibi")
+        test_no = st.session_state["nav_test_no"]
+        points = tuple([(sx, sy)] + [tuple(p) for p in wps] + [(tx, ty)])
+        res, angle_rows = run_route(points, float(nav_wind), init_h, float(arr_r), float(max_t), allow_tack)
+        run_id = hashlib.md5(json.dumps([points, nav_wind, init_h, arr_r, max_t, allow_tack, test_no]).encode()).hexdigest()[:12]
+        _val = _nav_player(
+            run_id=run_id, test_no=test_no,
+            points=dict(start=[sx, sy], target=[tx, ty], waypoints=wps),
+            arrival_radius=float(arr_r), wind=float(nav_wind),
+            result=route_payload(res), rows=angle_rows, height=500,
+            key="nav_player", default=None)
+        if isinstance(_val, dict) and _val.get("token") and _val["token"] != st.session_state["nav_map_token"]:
+            st.session_state["nav_pending_edit"] = _val      # düzenleme bu çalıştırmada uygulanamadıysa
+            st.rerun()
+
         if res.reached:
-            st.success(f"✅ Hedefe ulaşıldı: {res.time:.0f} s ({res.time / 60:.1f} dk)")
+            st.success(f"✅ Hedefe ulaşıldı: {res.time:.0f} s ({res.time / 60:.1f} dk) — "
+                       f"{len(points) - 1} bacak, {res.n_tacks} tack, {res.n_gybes} gybe")
         else:
             st.error(f"❌ Hedefe ulaşılamadı: {res.reason} — kalan mesafe {res.final_distance:.0f} m")
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Düz mesafe", f"{res.straight_distance:.0f} m")
+        m1.metric("Rota uzunluğu (düz)", f"{res.straight_distance:.0f} m")
         m2.metric("Katedilen yol", f"{res.path_length:.0f} m")
-        m3.metric("Ort. VMG", f"{(res.straight_distance - res.final_distance) / max(res.time, 1e-9):.2f} m/s")
+        m3.metric("Ort. hız (yol / süre)", f"{res.path_length / max(res.time, 1e-9):.2f} m/s")
         m4.metric("Tack / Gybe", f"{res.n_tacks} / {res.n_gybes}")
+
+        _tbl = pd.DataFrame(angle_rows).rename(columns=ANGLE_COLUMNS)
+        st.download_button("⬇️ Açı takip tablosunu indir (CSV)", _tbl.to_csv(index=False).encode("utf-8-sig"),
+                           file_name=f"aci_takip_test{test_no}.csv", mime="text/csv")

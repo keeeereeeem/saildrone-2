@@ -1,35 +1,371 @@
-# Saildrone / Yelkenli Katamaran Simülatörü — Hata Analizi, Matematiksel Model ve Navigasyon Test Raporu
+# Saildrone / Yelkenli Katamaran Simülatörü — Kumaş Yelken Modeli: Matematiksel Model, Hedefe Navigasyon ve Test Raporu
 
-**Tarih:** 19 Ekim 2026  **Kapsam:** `app.py` (Streamlit simülatörü) ve bu çalışmada eklenen `saildrone_model.py`, `navigation.py`, `tests/`, `analysis/`
+**Tarih:** 21 Ekim 2026  **Kapsam:** `saildrone_model.py` (fizik modeli), `navigation.py` (güdüm ve kontrol), `app.py` + `components/nav_player` (arayüz), `tests/`, `analysis/`
 
 ---
 
 ## 1. Özet
 
+Bu çalışmada simülatör **tek bir yelken modeline — Kumaş Yelken (Cambered / Klasik)** — indirgenmiştir. Model, aynı denklemlerle hem *Serbest Seyir* (kullanıcının yelken, dümen ve pruva açılarını elle verdiği açık çevrim) hem de *Hedefe Navigasyon* (sistemin açıları kendisinin atadığı kapalı çevrim) ekranlarında kullanılır.
+
 | Başlık | Sonuç |
 |---|---|
-| Bulunan mantık hatası | **8** (6'sı sayısal olarak kanıtlandı, hepsi düzeltildi) |
-| Çıkarılan model | Polar + trim verimi + dümen cezası → hedef hız; 1. derece surge ataleti; kinematik dönüş + orsaya kaçma; 2B kinematik konum; VMG tabanlı güdüm + layline/koridor kontra değiştirme + ters-kinematik dümen kontrolcüsü |
-| Birim testleri | **174 / 174 geçti** (`pytest`, model 78 + navigasyon 96) |
-| Navigasyon senaryo matrisi | **72 / 72 hedefe ulaşıldı** (3 profil × 4 rüzgar hızı × 6 başlangıç–hedef çifti) |
-| 360° erişilebilirlik | **144 / 144 hedefe ulaşıldı** (1 km yarıçapta 15°'de bir hedef, 3 profil, 3 ve 8 m/s) |
-| Saildrone gidebilir mi? | **Evet**, şu koşullarla: (1) başlangıç pruvası ölü açıda (TWA ≤ 30°) olmamalı, (2) süre sınırı yeterli olmalı, (3) tack yapılamıyorsa varış yarıçapı dönüş çapından (≈2R) büyük olmalı. |
+| Yelken modeli | Kumaş yelken: 5 bantlı hız poları + trim verimi + dümen sürüklemesi |
+| Serbest seyir dinamiği | Hedef hız → 1. derece ileri (surge) dinamiği → kinematik dönüş + orsaya kaçma → konum |
+| Hedefe navigasyon | Kerteriz → ölü açı kontrolü → VMG-optimum pruva → kontra (tack/gybe) kararı → auto-trim yelken açısı → ters-kinematik dümen açısı |
+| Rota | Başlangıç → istenen sayıda ara durak → hedef (çokgen, daire, yay rotaları) |
+| Birim testleri | **93 / 93 geçti** (`pytest`: model 40 + navigasyon 53) |
+| Senaryo matrisi | **24 / 24 hedefe ulaşıldı** (4 rüzgar hızı × 6 başlangıç–hedef çifti) |
+| 360° erişilebilirlik | **48 / 48 hedefe ulaşıldı** (1 km yarıçapta 15°'de bir hedef, 3 ve 8 m/s) |
+| Ara duraklı rota | Kare rota (4 bacak, 8 m/s) 406 s'de tamamlandı; 4 tack, 3 gybe |
+
+Rüzgar her testte **kuzeyden (000°) eser ve sabittir**; testler arasında yalnızca rüzgar hızı ve başlangıç / hedef konumları değiştirilir.
 
 ---
 
-## 2. Proje yapısı ve çalıştırma
+## 2. Koordinatlar, açılar ve işaret kuralları
+
+| Sembol | Anlamı | İşaret / aralık |
+|---|---|---|
+| $x, y$ | Doğu, Kuzey konumu (m) | — |
+| $\psi$ | Pruva açısı (pusula) | 0° = Kuzey, saat yönünde artar, $[0°, 360°)$ |
+| $U$ | Rüzgar hızı (m/s) | Kuzeyden eser |
+| $\theta$ | Gerçek rüzgar açısı (TWA) | $[0°, 180°]$ |
+| $\delta_s$ | Yelken bom açısı (orta hattan) | $+$: bom sancağa, $-$: iskeleye; $\lvert\delta_s\rvert \in [0°, 90°]$ |
+| $\delta_r$ | Dümen açısı | $+$: pala sancağa → tekne sancağa döner ($\psi$ artar); $\lvert\delta_r\rvert \le 35°$ |
+| $v$ | Teknenin ileri hızı (m/s) | $v \ge 0$ |
+| $s$ | Rüzgar altı bordası | $+1$: iskele kontra (yelken sancakta), $-1$: sancak kontra, $0$: ölü açı |
+
+Rüzgar kuzeyden geldiği için gerçek rüzgar açısı ve rüzgar altı bordası doğrudan pruvadan bulunur:
+
+$$\theta(\psi) = \min(\psi,\; 360° - \psi), \qquad s(\psi) = \begin{cases} +1, & 0° < \psi \le 180°,\ \theta > 30° \\ -1, & 180° < \psi < 360°,\ \theta > 30° \\ 0, & \theta \le 30° \ \text{(ölü açı)} \end{cases}$$
+
+---
+
+## 3. Serbest Seyir: Kumaş Yelken Dinamiği (adım adım)
+
+Serbest seyirde kullanıcı üç açıyı verir: **pruva $\psi_0$, yelken bom açısı $\delta_s$ ve dümen açısı $\delta_r$**. Bu üç açının teknenin hızına ve yönelimine etkisi aşağıdaki yedi adımla hesaplanır. Her adım bir öncekinin çıktısını kullanır.
+
+### Adım 1 — Rüzgarın tekneye göre açısı
+
+$\theta = \min(\psi, 360°-\psi)$. $\theta \le 30°$ ise tekne **ölü açıdadır (330°–030°)**: kumaş yelken rüzgarı tutamaz, yapraklar, itki sıfırdır.
+
+### Adım 2 — Seyir bandı: hız oranı ve optimum bom açısı
+
+$\theta$ hangi banda düşerse kumaş yelkenin o banttaki **hız oranı** $\rho = V_b/U$ ve **optimum bom açısı** $\delta_{opt}$ okunur:
+
+| Bant | $\theta$ aralığı | $\delta_{opt}$ | $\rho = V_b/U$ | Yelkenin durumu |
+|---|---|---|---|---|
+| Ölü açı | $0°$–$30°$ | — | 0 | Yapraklar, itki yok |
+| Orsa | $30°$–$50°$ | 16° | 0.62 | Iskota sonuna kadar kasılı |
+| Dar apaz | $50°$–$80°$ | 32° | 0.85 | Biraz boşlanmış, tor artar |
+| Tam apaz | $80°$–$120°$ | 46° | 1.15 | Tam dolu ve torlu (en hızlı seyir) |
+| Geniş apaz | $120°$–$150°$ | 65° | 0.92 | İyice boşlanmış |
+| Pupa | $150°$–$180°$ | 82° | 0.74 | Paraşüt gibi dolar, itki sürüklemeden |
+
+![Kumaş yelken hız poları](docs/figures/polar.png)
+
+### Adım 3 — Yelken trimi: aerodinamik verim $\eta(\delta_s)$
+
+Bomun optimum açıdan sapması $d = \lvert\,\lvert\delta_s\rvert - \delta_{opt}\rvert$ yelkenin ürettiği itkiyi azaltır:
+
+$$\eta(\delta_s) = \begin{cases} 1 - 0.05\,\dfrac{d}{6°}, & d \le 6° \quad \text{(tam trim)}\\[2mm] \max\!\left(0.15,\; 1 - \left(\dfrac{d}{25°}\right)^{1.6}\right), & \lvert\delta_s\rvert < \delta_{opt} \quad \text{(fazla kasılı: yelken düzleşir, akış kopar)}\\[2mm] \max\!\left(0.10,\; 1 - \left(\dfrac{d}{30°}\right)^{1.6}\right), & \lvert\delta_s\rvert > \delta_{opt} \quad \text{(fazla açık: ön kenar yapraklar)} \end{cases}$$
+
+Fazla açık dalın ölçeği (30°) fazla kasılı dalınkinden (25°) büyüktür: kumaş yelken boşlandığında itkiyi kademeli kaybeder, fazla kasıldığında ise akış daha erken kopar. *Auto-Trim* açıkken $\lvert\delta_s\rvert = \delta_{opt}$ alınır ve $\eta = 1$ olur.
+
+![Kumaş yelken trim verimi](docs/figures/trim_efficiency.png)
+
+### Adım 4 — Dümenin sürükleme etkisi $\kappa(\delta_r)$
+
+Açılan dümen palası suya karşı direnç oluşturur ve hızı düşürür:
+
+$$\kappa(\delta_r) = 1 - 0.22\left(\frac{\lvert\delta_r\rvert}{35°}\right)^2, \qquad \kappa(0) = 1,\ \ \kappa(\pm35°) = 0.78$$
+
+### Adım 5 — Aerodinamik kuvvetin gövdeye iletimi: hız
+
+Yelkenin ürettiği itki ile gövdenin su direnci dengelendiğinde tekne bir **kararlı-durum (hedef) hızına** ulaşır. Kumaş yelken modelinde bu denge hızı polar, trim ve dümen çarpanlarının çarpımıdır:
+
+$$V^* = U\cdot\rho(\theta)\cdot\eta(\delta_s)\cdot\kappa(\delta_r)$$
+
+Tekne bu hıza anında değil, kütlesi nedeniyle gecikmeyle ulaşır. İleri yön (surge) hareket denklemi $m\,\dot v = F_{itki} - F_{direnç}$, denge hızı etrafında doğrusallaştırılınca birinci derece bir sisteme dönüşür:
+
+$$\dot v = \frac{V^* - v}{\tau}, \qquad \tau = 3\ \text{s}$$
+
+Yani gövdeye iletilen **net ileri kuvvet** $F_{net} = m\,(V^*-v)/\tau$'dur: tekne hedef hızından yavaşsa yelken onu hızlandırır, hızlıysa (ör. ölü açıya girdiğinde $V^*=0$) su direnci yavaşlatır. Ayrık zamanda tam çözüm kullanılır (her $\Delta t$ için kararlı):
+
+$$v_{k+1} = V^*_k + (v_k - V^*_k)\,e^{-\Delta t/\tau}$$
+
+### Adım 6 — Dümen etkisi ve dönme momenti: yönelim
+
+Dümen palası, akışa açılı durduğunda bir yan kuvvet üretir; bu kuvvet gövdenin dönme merkezine olan uzaklığı ($L$) kadar bir kolla **dönme momenti** oluşturur. Momentin etkisi, yan kaymanın ihmal edildiği kinematik (bisiklet) modeliyle doğrudan dönüş hızına çevrilir. Buna ek olarak, kumaş yelkenin basınç merkezi gövdenin yanal direnç merkezinin gerisinde kaldığından tekne kendiliğinden rüzgara doğru döner (**orsaya kaçma**, weather helm):
+
+$$\dot\psi\ [°/\text{s}] = \underbrace{\frac{v}{L}\,\sin\delta_r\cdot\frac{180}{\pi}}_{\text{dümen momenti}} \;-\; \underbrace{s(\psi)\,\omega_{wh}}_{\text{yelken momenti}}, \qquad L = 4.6\ \text{m},\ \ \omega_{wh} = 0.35\ °/\text{s}$$
+
+* Dümen etkisi **hızla orantılıdır**: $v \le 0.2$ m/s iken $\dot\psi = 0$ (dümen dümen tutmaz).
+* Sabit dümende dönüş yarıçapı $R = L/\sin\delta_r$ (tam dümende $R = 8.0$ m).
+* Orsaya kaçma rüzgar altı bordasına bağlıdır: iskele kontrada ($s=+1$) pruva azalır, sancak kontrada ($s=-1$) artar — her iki durumda da tekne rüzgara döner.
+
+### Adım 7 — Konum
+
+$$\dot x = v\sin\psi, \qquad \dot y = v\cos\psi$$
+
+### Sayısal çözüm ($\Delta t = 0.25$ s)
+
+Her adımda sırasıyla: (1) $\theta_k$, $\rho$, $\delta_{opt}$; (2) $\eta$, $\kappa$ → $V^*_k$; (3) $v_{k+1}$; (4) $\psi_{k+1} = \psi_k + \dot\psi(v_{k+1}, \delta_r, \psi_k)\,\Delta t$; (5) $x, y \mathrel{+}= v_{k+1}(\sin\psi_{k+1}, \cos\psi_{k+1})\,\Delta t$. Auto-Trim açıksa (2)'de bom açısı her adımda yeni $\theta$'ya göre güncellenir.
+
+### Sayısal örnek (U = 8 m/s, $\psi$ = 090°, tam apaz)
+
+| Girdi | $\eta$ | $\kappa$ | $V^*$ (m/s) | $\dot\psi$ (°/s) | Yorum |
+|---|---|---|---|---|---|
+| $\delta_s = 46°$, $\delta_r = 0°$ | 1.00 | 1.00 | **9.20** | −0.35 | Tam trim; yalnızca orsaya kaçma |
+| $\delta_s = 30°$, $\delta_r = 0°$ | 0.51 | 1.00 | 4.70 | −0.35 | 16° fazla kasılı: itki yarıya düşer |
+| $\delta_s = 60°$, $\delta_r = 0°$ | 0.71 | 1.00 | 6.48 | −0.35 | 14° fazla açık: yapraklama |
+| $\delta_s = 46°$, $\delta_r = +10°$ | 1.00 | 0.98 | 9.03 | +19.2 | $R$ = 26.5 m sancağa dönüş |
+| $\delta_s = 46°$, $\delta_r = +20°$ | 1.00 | 0.93 | 8.54 | +36.0 | $R$ = 13.4 m |
+| $\delta_s = 46°$, $\delta_r = +35°$ | 1.00 | 0.78 | 7.18 | +50.9 | Tam dümen, $R$ = 8.0 m |
+
+---
+
+## 4. Hedefe Navigasyon: Kumaş Yelkenle Hedefe Gidiş (adım adım)
+
+Navigasyonda üç açıyı artık **sistem atar**: hedef pruva $\psi^*$, yelken açısı $\delta_s$ ve dümen açısı $\delta_r$. Rota, başlangıç (B), istenen sayıda ara durak (1, 2, …) ve hedeften (H) oluşan bacaklara bölünür; **her bacakta aynı algoritma** çalışır ve tekne bir sonraki bacağa önceki bacağın son pruvası ve hızıyla girer. Aşağıdaki adımlar her güdüm periyodunda (1 s) tekrarlanır.
+
+### Adım 1 — Hedefin kerterizi
+
+Teknenin $(x, y)$ konumundan bacağın hedef noktasına $(x_h, y_h)$ pusula açısı:
+
+$$\beta = \operatorname{atan2}(x_h - x,\; y_h - y) \quad (0° = \text{Kuzey})$$
+
+### Adım 2 — Ölü açı kontrolü
+
+$\theta(\beta) \le 30°$ ise hedef **ölü açının içindedir**: doğrudan hedefe dönülürse yelken yapraklar ve tekne durur. Bu durumda tekne hedefe zikzakla (kontra değiştirerek) gider. Kontrol, bir sonraki adımdaki VMG aramasında ölü açıya **5° güvenlik payı** bırakılarak otomatik olarak sağlanır (aranan pruvalar $\theta \ge 35°$).
+
+### Adım 3 — Optimum pruva: VMG (hedefe doğru hız bileşeni)
+
+Tekne hedefe doğru değil, **hedefe en hızlı yaklaştıran** pruvaya yönlendirilir. Bir $\psi$ pruvasının hedefe yaklaşma hızı:
+
+$$\text{VMG}(\psi) = \underbrace{U\,\rho(\theta(\psi))}_{\text{teknenin hızı}}\cdot\cos(\psi - \beta)$$
+
+Her kontra için en iyi pruva ayrı aranır ($s=+1$: $\psi = \theta$, $s=-1$: $\psi = 360° - \theta$):
+
+$$\psi^*_{s} = \arg\max_{\theta \,\ge\, 35°} \ \text{VMG}(\psi_s(\theta))$$
+
+**Rüzgar üstü hedef örneği ($\beta = 0°$, hedef tam kuzeyde):**
+
+| Aday $\theta$ | Bant | $\rho$ | $\text{VMG}/U = \rho\cos\theta$ |
+|---|---|---|---|
+| 35.5° | Orsa | 0.62 | 0.505 |
+| 40.0° | Orsa | 0.62 | 0.475 |
+| **50.5°** | **Dar apaz** | **0.85** | **0.541 ← en iyi** |
+| 60.0° | Dar apaz | 0.85 | 0.425 |
+| 80.5° | Tam apaz | 1.15 | 0.190 |
+
+Kumaş yelken orsada (0.62) yavaş olduğundan, rüzgara en dik açıyla (35.5°) gitmek yerine **50.5°'de dar apaz** gitmek hedefe daha hızlı yaklaştırır: $\psi^* = 050.5°$ (iskele kontra) veya $309.5°$ (sancak kontra). Benzer şekilde **rüzgar altı hedefte** ($\beta = 180°$) en iyi açı $\theta = 150°$'dir ($\text{VMG}/U = 0.92\cos30° = 0.797$); tam pupa ($0.74$) daha yavaştır, bu yüzden rüzgar altına da zikzakla (gybe ile) gidilir.
+
+### Adım 4 — Kontra seçimi ve değiştirme kuralı
+
+Tekne mevcut kontrasında kalır. Diğer kontranın VMG'si daha büyükse ve aşağıdakilerden biri sağlanırsa kontra değiştirilir:
+
+1. **Hedef geride kaldı:** mevcut kontranın VMG'si $\le 0$.
+2. **Layline:** diğer kontranın optimum pruvası $\psi^*_{-s}$ artık hedefi "tutuyor" — tekne o pruvaya dönerse hedefe tek bacakta ulaşır.
+3. **Koridor:** tekne başlangıç–hedef hattından $W = 0.2\,D$ (50–1000 m arası) kadar uzaklaştı ve hâlâ uzaklaşıyor.
+
+Gereksiz manevrayı önlemek için iki kontra değişimi arasında en az 10 s geçmelidir.
+
+### Adım 5 — Manevra türü: tack mı, gybe mi?
+
+Yeni pruvaya en kısa dönüş rüzgarın içinden (ölü açıdan) geçiyorsa bu bir **tack**'tir. Ölü açıda $V^* = 0$ olduğundan tekne yalnızca taşıdığı hızla döner; hız $v_0 e^{-t/\tau}$ ile söner. Tam dümenle dönülebilecek toplam açı:
+
+$$\Theta_{max} = \int_0^\infty \frac{v_0\,e^{-t/\tau}}{L}\,\sin\delta_{max}\,dt = \frac{v_0\,\tau\,\sin\delta_{max}}{L}$$
+
+Ölü açıyı ve 5° payı geçmek için gereken açı $2\cdot30° + 5° = 65°$'dir:
+
+* Fiziksel alt sınır ($\Theta_{max} \ge 65°$): $v_0 \ge 3.03$ m/s.
+* Navigasyonun karar ölçütü 1.3 güvenlik katsayısı içerir ($\Theta_{max} \ge 84.5°$): $v_0 \ge 3.94$ m/s. Bu sağlansa bile karar, manevranın ileri simülasyonuyla kesinleştirilir.
+
+Kumaş yelkenle bu, orsadan tack için yaklaşık **U ≥ 6.5 m/s** demektir (açık çevrim simülasyonu: 6.5 m/s'de tack başlangıç hızı 3.14 m/s). Tack mümkün değilse tekne **rüzgar altından ~290° dönerek (gybe)** kontra değiştirir; bu durumda değişim, manevra sonrasında hedefin hâlâ tutulabildiği ileri simülasyonla doğrulanınca yapılır.
+
+### Adım 6 — Yelken açısının atanması (auto-trim)
+
+Yelken her adımda anlık rüzgar açısına göre optimum açıya ve **rüzgar altı bordasına** açılır:
+
+$$\delta_s = s(\psi)\cdot\delta_{opt}(\theta(\psi)) \;\Rightarrow\; \eta = 1$$
+
+Örn. $\psi = 050.5°$ → $+32°$ (bom sancakta), $\psi = 309.5°$ → $-32°$ (bom iskelede). Tack sırasında $\theta \le 30°$ olduğundan $\delta_s = 0$ (yelken yapraklar), tack bitince bom karşı bordaya geçer.
+
+### Adım 7 — Dümen açısının atanması (ters kinematik kontrolcü)
+
+Pruva hatası $e = \psi^* - \psi$ (seçilen dönüş yönüne göre işaretli) bir istenen dönüş hızına, bu da Adım 6'daki dönüş denkleminin tersiyle dümen açısına çevrilir:
+
+$$r^* = \operatorname{sat}\!\big(k\,e,\ \pm30°/\text{s}\big) + s(\psi)\,\omega_{wh}, \qquad \delta_r = \operatorname{sat}\!\left(\arcsin\frac{r^*\,L}{v},\ \pm35°\right), \qquad k = 0.5\ \text{s}^{-1}$$
+
+* Doymasız bölgede kapalı çevrim $\dot e = -k\,e$ olur: pruva hatası 2 s zaman sabitiyle, **hızdan bağımsız** olarak söner.
+* $s\,\omega_{wh}$ terimi orsaya kaçmayı önceden karşılar; bu yüzden düz seyirde dümen sıfır değil, küçük bir sabit açıdır: $\delta_{r,ss} = \arcsin(s\,\omega_{wh} L / v)$. Örn. $v = 6.8$ m/s'de $\delta_{r,ss} = +0.24°$ (iskele kontra).
+* Tack/gybe sırasında hata büyük olduğundan dümen ±35° sınırına dayanır.
+
+### Adım 8 — Varış ve başarısızlık
+
+* **Ara durak / hedefe varış:** $\lVert p - p_h \rVert \le r_{varış}$ (varsayılan 10 m). Ara durakta tekne bir sonraki bacağın en iyi VMG kontrasını seçer.
+* **Başarısızlık:** süre sınırı (tüm rota için, varsayılan 7200 s) aşılırsa veya tekne ölü açıda $v < 0.05$ m/s ile 20 s kalırsa.
+
+### Akış özeti
 
 ```
-app.py                       Streamlit arayüzü (Serbest Seyir + Hedefe Navigasyon sekmeleri)
-saildrone_model.py           Fizik modeli (Streamlit'ten bağımsız, test edilebilir)
-navigation.py                Güdüm, manevra kararı ve dümen kontrolcüsü
-tests/test_model.py          Model birim testleri
-tests/test_navigation.py     Navigasyon (başlangıç → hedef) testleri
-analysis/legacy_bug_evidence.py  Orijinal koddaki hataları sayısal olarak gösterir
-analysis/run_experiments.py      Bu rapordaki tüm tablo ve grafikleri üretir
-legacy/app_original.py       Orijinal app.py (karşılaştırma için)
-docs/figures, docs/results   Üretilen grafikler ve tablolar
+Her güdüm periyodunda (1 s):
+  β  ← hedef kerterizi                                   (Adım 1)
+  ψ*₊, ψ*₋ ← her kontra için max VMG, θ ≥ 35°           (Adım 2–3)
+  kontra değişsin mi? (VMG ≤ 0 | layline | koridor)      (Adım 4)
+  dönüş yönü ← tack mümkünse rüzgar içinden, değilse gybe (Adım 5)
+Her entegrasyon adımında (0.25 s):
+  δs ← s(ψ)·δopt(θ)                                      (Adım 6)
+  δr ← sat(asin(r*·L / v), ±35°)                         (Adım 7)
+  v, ψ, x, y ← Bölüm 3 denklemleri
+  varış / başarısızlık kontrolü                          (Adım 8)
 ```
+
+### 4.1 Örnek: tam rüzgar üstü hedef (B = (0, 0) → H = (0, 1000) m, U = 8 m/s)
+
+Hedef ölü açının tam ortasında ($\beta = 0°$). Tekne 50.5°'de dar apazla başlar, hedef yaklaştıkça layline'a göre 35.5° orsaya çıkar ve 4 tack ile 258 s'de hedefe ulaşır. Arayüzdeki **Açı Takip Tablosu**'nun bu test için ürettiği kayıt:
+
+| # | Zaman (s) | Bacak | Olay | ψ* (°) | TWA (°) | Seyir | Kontra | δs (°) | δr manevra (°) | δr seyir (°) | Ort. hız (m/s) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 0–22 | B→H | Başlangıç | 50.5 | 50.5 | Dar Apaz | İskele | +32 | +0.0 | +0.2 | 6.80 |
+| 2 | 22–50 | B→H | Rota düzeltme | 35.5 | 35.5 | Orsa | İskele | +16 | −4.8 | +0.2 | 5.16 |
+| 3 | 50–109 | B→H | Tack | 309.5 | 50.5 | Dar Apaz | Sancak | −32 | −35.0 | −0.4 | 6.14 |
+| 4 | 109–153 | B→H | Rota düzeltme | 324.5 | 35.5 | Orsa | Sancak | −16 | +4.8 | −0.2 | 5.09 |
+| 5 | 153–203 | B→H | Tack | 50.5 | 50.5 | Dar Apaz | İskele | +32 | +35.0 | +0.4 | 6.02 |
+| 6 | 203–229 | B→H | Rota düzeltme | 35.5 | 35.5 | Orsa | İskele | +16 | −4.8 | +0.1 | 5.18 |
+| 7 | 229–245 | B→H | Tack | 279.5 | 80.5 | Tam Apaz | Sancak | −46 | −35.0 | −0.7 | 5.32 |
+| 8 | 245–258 | B→H | Rota düzeltme | 309.5 | 50.5 | Dar Apaz | Sancak | −32 | +7.9 | +16.7 | 5.85 |
+
+*δr manevra*: pruva yeni ψ*'a oturana kadarki en büyük dümen açısı; *δr seyir*: manevra sonrası ortalama dümen açısı. Tack satırlarında dümen ±35°'ye dayanır, yelken işaret değiştirir (bom karşı bordaya geçer); düz seyirde dümen yalnızca orsaya kaçmayı karşılayan ≈ ±0.2°'dir. Son satır, hedefin hemen yakınındaki son yaklaşma manevrasıdır.
+
+![S4 zaman serileri: pruva, yelken, dümen, hız](docs/figures/timeseries_S4_U8.png)
+
+### 4.2 Örnek: ara duraklı kare rota (B → 1 → 2 → 3 → H, 600 m, U = 8 m/s)
+
+| # | Zaman (s) | Bacak | Olay | ψ* (°) | TWA (°) | Seyir | Kontra | δs (°) | δr manevra (°) | δr seyir (°) | Ort. hız (m/s) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 0–64 | B→1 | Başlangıç | 90.0 | 90.0 | Tam Apaz | İskele | +46 | +0.0 | +0.2 | 9.20 |
+| 2 | 64–75 | 1→2 | Ara durak 1 ✓ | 50.5 | 50.5 | Dar Apaz | İskele | +32 | −9.7 | −0.2 | 7.56 |
+| 3 | 76–91 | 1→2 | Rota düzeltme | 35.5 | 35.5 | Orsa | İskele | +16 | −4.8 | +0.0 | 5.33 |
+| 4 | 92–130 | 1→2 | Tack | 309.5 | 50.5 | Dar Apaz | Sancak | −32 | −35.0 | −0.4 | 5.80 |
+| 5 | 130–155 | 1→2 | Rota düzeltme | 324.5 | 35.5 | Orsa | Sancak | −16 | +4.8 | −0.1 | 5.19 |
+| 6 | 156–189 | 1→2 | Tack | 50.5 | 50.5 | Dar Apaz | İskele | +32 | +35.0 | +0.5 | 5.65 |
+| 7 | 190–204 | 1→2 | Rota düzeltme | 35.5 | 35.5 | Orsa | İskele | +16 | −4.8 | −0.0 | 5.34 |
+| 8 | 204–228 | 1→2 | Tack | 279.5 | 80.5 | Tam Apaz | Sancak | −46 | −35.0 | +12.1 | 4.98 |
+| 9 | 229–299 | 2→3 | Ara durak 2 ✓ | 270.0 | 90.0 | Tam Apaz | Sancak | −46 | +28.3 | −0.1 | 8.83 |
+| 10 | 299–328 | 3→H | Ara durak 3 ✓ | 150.0 | 150.0 | Geniş Apaz | İskele | +65 | −16.4 | +0.1 | 6.40 |
+| 11 | 328–397 | 3→H | Rota düzeltme | 180.0 | 180.0 | Pupa | İskele | +82 | +12.0 | +0.2 | 5.92 |
+| 12 | 397–406 | 3→H | Gybe | 240.0 | 120.0 | Tam Apaz | Sancak | −46 | +24.3 | +1.9 | 7.08 |
+
+Doğuya giden ilk bacak tam apazdır (9.2 m/s, düz). Kuzeye giden ikinci bacak rüzgar üstüdür ve zikzakla (3 tack) geçilir. Batıya giden üçüncü bacak yine tam apazdır (bom bu kez iskelede, −46°). Güneye dönüşte tekne 150° geniş apaz ve pupa ile iner, hedefe gybe ile oturur.
+
+![Kare rota](docs/figures/waypoint_square_U8.png)
+
+---
+
+## 5. Arayüz: Hedefe Navigasyon ekranı
+
+Serbest Seyir ekranındaki kullanım kolaylığı Hedefe Navigasyon ekranına taşınmıştır:
+
+| Özellik | Açıklama |
+|---|---|
+| Kaydırıcı + kutucuk | Rüzgar hızı, başlangıç/hedef X–Y, varış yarıçapı, süre sınırı ve (isteğe bağlı) başlangıç pruvası hem kaydırıcıyla hem klavyeyle girilir; ikisi senkron kalır. |
+| Sürükle-bırak | Haritadaki başlangıç (B), hedef (H) ve ara duraklar fareyle sürüklenir; bırakınca koordinat kutucukları güncellenir ve rota yeniden hesaplanır. |
+| Ara duraklar | Haritada çift tıklama veya "➕ Ara durak ekle" ile eklenir, sağ tık veya "➖" ile silinir, tablodan elle düzenlenir. Hazır şablonlar: kare, üçgen, altıgen, daire (12 nokta), yay. |
+| Açı Takip Tablosu | Her yeni testte sıfırlanır; oynatma ilerledikçe rota bacaklarında sistemin atadığı pruva ψ*, TWA/seyir tipi, yelken δs ve dümen δr (manevra + seyir) satır satır eklenir, etkin satır vurgulanır. CSV olarak indirilebilir. |
+| Hızlandırılmış oynatma | Rota baştan sona ×1–×200 hızla oynatılır (varsayılan: görev ≈ 20–25 s'de); duraklat, baştan oynat ve zaman çubuğuyla istenen ana gidilebilir. |
+| Canlı göstergeler | Zaman, anlık hız (m/s, kts), pruva ψ ve atanan ψ*, yelken δs, dümen δr, seyir tipi/TWA, aktif bacak ve kalan mesafe oynatma boyunca canlı akar. |
+| Katamaran animasyonu | Haritadaki tekne ve "yakın görünüm" penceresinde yelkenin (mavi) ve dümen palalarının (kırmızı) anlık açıları, ölü açı dilimi ve atanan pruva ile birlikte dinamik olarak çizilir. |
+
+Uygulama: `streamlit run app.py`. Harita bileşeni `components/nav_player/index.html` dosyasındadır (dış bağımlılık yoktur).
+
+---
+
+## 6. Testler ve sonuçlar
+
+### 6.1 Birim testleri (93 / 93 ✔)
+
+`tests/test_model.py` — ölü açıda itki sıfır; iskele/sancak simetrisi; kontra adlandırması; trim verimi tepe değeri ve sınırları; dümen cezası; düz seyirde yol = hız × süre; telemetri hızı = dinamik hız; pozitif dümen → sancağa dönüş; orsaya kaçma yönü; ölü açıda başlayan tekne hareketsiz; surge yakınsaması; auto-trim'in dönüş boyunca yeniden trim yapması.
+
+`tests/test_navigation.py` — 24 senaryonun tamamı; dümen sınırı ve ölü açıda geçen sürenin < %5 olması; rüzgar üstünde tack gerekliliği; hafif rüzgarda gybe; ölü açıda başlangıcın başarısızlık olarak raporlanması; sıfır mesafe; süre sınırı; 10 km menzil; 12 yönde erişilebilirlik; tack fizibilitesi; layline geometrisi; **ara duraklı rotada tüm durakların ziyareti; rota süre sınırı; yelken açısının rüzgar altı bordasında olması; açı takip tablosunun tack ve ara durakları kaydetmesi.**
+
+### 6.2 Senaryo matrisi (24 / 24 ✔)
+
+S1 (0,0)→(1000,0) tam apaz · S2 (0,0)→(0,−1000) tam rüzgar altı · S3 (0,0)→(700,700) · S4 (0,0)→(0,1000) tam rüzgar üstü · S5 (0,0)→(300,1000) ölü açı içinde (017°) · S6 (500,−300)→(−400,800).
+
+| U (m/s) | S1 | S2 | S3 | S4 | S5 | S6 |
+|---|---|---|---|---|---|---|
+| 1 | ✔ 861 s | ✔ 1357 s | ✔ 1668 s | ✔ 2419 s | ✔ 2312 s | ✔ 2419 s |
+| 3 | ✔ 287 s | ✔ 453 s | ✔ 559 s | ✔ 808 s | ✔ 772 s | ✔ 809 s |
+| 8 | ✔ 108 s | ✔ 171 s | ✔ 198 s | ✔ 258 s | ✔ 268 s | ✔ 288 s |
+| 15 | ✔ 58 s | ✔ 92 s | ✔ 113 s | ✔ 163 s | ✔ 144 s | ✔ 160 s |
+
+* **Tam apaz en hızlı yöndür**; aynı mesafe için tam rüzgar üstü ≈ 2.4×, tam rüzgar altı ≈ 1.6× daha uzun sürer.
+* 1 ve 3 m/s'de tekne hızı tack eşiğinin altında kaldığından kontra değişimleri gybe ile yapılır ve görev yine tamamlanır.
+* Tam tablo (yol, rota verimi, tack/gybe sayıları): [docs/results/scenario_matrix.md](docs/results/scenario_matrix.md).
+
+![Rotalar, U = 8 m/s](docs/figures/trajectories_U8.png)
+
+![Hafif ve kuvvetli rüzgarda tam rüzgar üstü](docs/figures/upwind_light_vs_strong.png)
+
+### 6.3 360° erişilebilirlik (48 / 48 ✔)
+
+1 km yarıçaplı çember üzerinde 15°'de bir 24 hedef, 3 ve 8 m/s. Grafik "etkin VMG = 1000 m / varış süresi" değerini gösterir: ölü açı yönündeki hedefler (000°, 015°, 345°) en yavaş, 090°–120° ve 240°–270° (tam apaz) en hızlıdır. Tablo: [docs/results/reachability.md](docs/results/reachability.md).
+
+![Erişilebilirlik](docs/figures/reachability.png)
+
+### 6.4 Uç durumlar (U = 8 m/s, aksi belirtilmedikçe)
+
+| Durum | Ulaştı | Süre (s) | Tack | Gybe | Sonuç |
+|---|---|---|---|---|---|
+| Başlangıç pruvası ölü açıda (000°), hedef Doğu 1 km | ✘ | 20 | 0 | 0 | Ölü açıda takıldı — hız sıfır, dümen etkisiz |
+| Başlangıç pruvası ölü açı sınırında (032°), hedef Kuzey 1 km | ✔ | 261 | 4 | 0 | — |
+| Başlangıç pruvası ters yönde (180°), hedef Kuzey 1 km | ✔ | 268 | 4 | 0 | — |
+| Tack yasak, varış yarıçapı 10 m, Kuzey 1 km | ✘ | 7200 | 0 | 435 | Süre sınırı (hedef çevresinde döngü) |
+| Tack yasak, varış yarıçapı 30 m, Kuzey 1 km | ✔ | 308 | 0 | 2 | — |
+| Hafif rüzgar 2 m/s (tack fiziksel olarak imkânsız), Kuzey 1 km | ✔ | 1209 | 0 | 2 | — |
+| Hedef başlangıçta (mesafe 0) | ✔ | 0 | 0 | 0 | — |
+| Uzun menzil: Kuzey 10 km, 5 m/s | ✔ | 4485 | 2 | 3 | — |
+| Kısa süre limiti: Kuzey 1 km, 3 m/s, 300 s | ✘ | 300 | 0 | 0 | Süre sınırı |
+
+### 6.5 Tack yapılamıyorsa: varış yarıçapı duyarlılığı (Kuzey 1 km)
+
+| Varış yarıçapı (m) | U=3 | U=5 | U=8 | U=12 | U=15 |
+|---|---|---|---|---|---|
+| *Dönüş çapı 2R (m)* | *16* | *16* | *19* | *28* | *36* |
+| 10 | ✔ 808 s | ✔ 885 s | ✘ | ✘ | ✘ |
+| 20 | ✔ 803 s | ✔ 484 s | ✔ 310 s | ✘ | ✘ |
+| 30 | ✔ 768 s | ✔ 481 s | ✔ 308 s | ✔ 232 s | ✔ 289 s |
+| 40 | ✔ 758 s | ✔ 456 s | ✔ 291 s | ✔ 214 s | ✔ 177 s |
+
+Hedefe rüzgar altından dönüşle yaklaşılıyorsa varış yarıçapı dönüş çapı mertebesinde olmalıdır; aksi halde manevra tekneyi hedefin rüzgar altına iter ve hedef çevresinde döngü oluşur. Normal modda (tack serbest) bu durum yalnızca tekne hızı tack eşiğinin altındayken oluşur; o hızlarda $R \approx 8$ m olduğundan varsayılan 10 m yeterlidir.
+
+---
+
+## 7. Sonuç
+
+Kumaş yelken modeli ve navigasyon kontrolcüsüyle tekne, test edilen 72 başlangıç–hedef–rüzgar kombinasyonunun (24 senaryo + 48 erişilebilirlik) tamamında ve ara duraklı rotalarda hedefe ulaşmıştır. Hedef ölü açının içinde olsa bile sistem, VMG-optimum pruvayı (rüzgar üstünde 50.5°/35.5°, rüzgar altında 150°) seçip tack veya gybe ile zikzak yapar; her an yelkeni rüzgar altı bordasında optimum açıya açar ve dümeni ters-kinematik kontrolcüyle ±35° sınırında tutar.
+
+Ulaşılamayan durumlar: (1) başlangıç pruvası ölü açıda ve tekne durgunsa, (2) süre sınırı mesafe/etkin VMG'den kısaysa, (3) tack yapılamıyor ve varış yarıçapı dönüş çapından küçükse.
+
+---
+
+## 8. Model sınırlamaları
+
+| Sınırlama | Etkisi | Öneri |
+|---|---|---|
+| Parçalı sabit polar | VMG-optimum pruvalar bant kenarlarına (35.5°, 50.5°, 80.5°, 150°) düşer | Poları $\theta$'ya göre sürekli (spline) yapmak |
+| $V_b \propto U$ (doygunluk yok) | Kuvvetli rüzgarda gerçekçi olmayan hızlar | Rüzgarla doyuran polar, reef |
+| Yan kayma (leeway), akıntı, dalga yok | Rota suya göredir | Leeway açısı ve akıntı vektörü |
+| Yaw ataleti yok (kinematik dönüş) | Manevralar gerçekte daha yavaş | $I_z\dot r = N_\delta\,\delta_r - N_r\,r$ |
+| Ölü açıda durgun tekne kurtulamaz | Uç durum 1 | Rüzgarla sürüklenme / backing modeli |
+| $\tau = 3$ s varsayımdır | Tack eşiğini belirler ($v_{min} \propto 1/\tau$) | Gerçek tekne verisiyle tanımlama |
+
+---
+
+## 9. Yeniden üretme
 
 ```bash
 pip install -r requirements.txt pytest
@@ -44,317 +380,21 @@ python analysis/run_experiments.py
 streamlit run app.py
 ```
 
+Grafikler `docs/figures/`, tablolar `docs/results/` altına yeniden yazılır (açı takip tabloları: `angle_log_S4_U8.md`, `angle_log_square_U8.md`).
+
 ---
 
-## 3. Bulunan mantık hataları ve düzeltmeler
+## Ek A — Önceki sürümde düzeltilen hatalar (özet)
 
-Kanıtların tamamı: [docs/results/legacy_bug_evidence.md](docs/results/legacy_bug_evidence.md) (orijinal fonksiyonlar `legacy/app_original.py`'den doğrudan yüklenip çalıştırılmıştır).
+Kanıtlar: [docs/results/legacy_bug_evidence.md](docs/results/legacy_bug_evidence.md) (`python analysis/legacy_bug_evidence.py`).
 
-### H1 — Kontra (tack) isimleri ters
-Rüzgar kuzeyden eserken doğuya giden (ψ = 30°–150°) teknede rüzgar **iskele** (sol) bordadan gelir; bu **iskele kontra**dır. Orijinal kod aynı satırda `wind_side = "İskele (Sol)"` ile `tack = "Sancak Kontra"` döndürüyordu — kendi içinde çelişkili.
-
-| ψ | Eski tack / rüzgar tarafı | Yeni |
+| # | Hata | Düzeltme |
 |---|---|---|
-| 45°, 90° | Sancak Kontra / İskele (Sol) ❌ | İskele Kontra / İskele (Sol) ✔ |
-| 270° | İskele Kontra / Sancak (Sağ) ❌ | Sancak Kontra / Sancak (Sağ) ✔ |
-
-**Düzeltme:** Rejim ve kontra adları rüzgarın geldiği bordaya göre üretiliyor (`saildrone_model.analyze_points_of_sail_360`).
-
-### H2 — İskele/sancak sınır asimetrisi
-Sancak tarafı aralıkları `(alt, üst]`, iskele tarafı da pusula açısında `(alt, üst]` yazıldığı için aynı TWA iki tarafta farklı rejime düşüyordu:
-
-| TWA | ψ = TWA | ψ = 360 − TWA |
-|---|---|---|
-| 50° | Orsa, oran 0.78 | Dar Apaz, oran **0.98** |
-| 80° | Dar Apaz, 0.98 | Tam Apaz, **1.30** |
-| 120° | Tam Apaz, 1.30 | Geniş Apaz, **0.98** |
-| 150° | Geniş Apaz, 0.98 | Pupa, **0.58** |
-
-**Düzeltme:** Önce TWA = min(ψ, 360 − ψ) hesaplanıp tek bir bant tablosu (TWA ∈ (alt, üst]) kullanılıyor; simetri testlerle doğrulandı.
-
-### H3 — Gösterilen hız ile simülasyon hızı farklı formüllerle hesaplanıyordu
-Telemetri hızı (`trim_efficiency`) tolerans bantlı ve "fazla kasılı / fazla açık" ayrımlı bir formül kullanırken, yörünge döngüsü farklı katsayı ve üslerle **ikinci bir formül** kullanıyordu (ör. kumaş: telemetride `(d/25)^1.6`, döngüde `(d/28)^1.8`). Ayrıca döngüdeki formül d = 20° sınırında 0.08 → 0.06 sıçrıyordu.
-
-* Saf formül farkı (aynı bom/optimum için): NACA 0012 **−%62**, NACA 0015 **−%45**, kumaş **+%110**.
-* 30 s sabit seyirde ekranda gösterilen hız ile "gidilen yol / süre" arasında **%46.7'ye varan** fark.
-
-**Düzeltme:** Tek bir `trim_efficiency()` fonksiyonu hem telemetride hem dinamikte kullanılıyor.
-
-### H4 — Auto-Trim dönüş sırasında yeniden trim yapmıyordu
-Auto-trim, bom açısını yalnız başlangıç pruvasına göre ayarlayıp tüm simülasyon boyunca donduruyordu. ψ₀ = 60°, dümen +20°, 20 s, 8 m/s: **eski 22.0 m, yeni 64.6 m** (Saildrone'un otomatik kanat kontrolü her adımda optimuma gelir).
-
-### H5 — Orsaya kaçma (weather helm) süreksizliği
-Orsaya kaçma momenti yalnızca |δ| < 2° iken uygulanıyordu; 0.1°'lik dümen farkı 60 s sonunda pruvayı **14°** değiştiriyordu (δ = 1.9° → 120.8°, δ = 2.0° → 135.0°). Yeni modelde moment her zaman var ve dümen onu karşılar: 127.4° → 128.3° (sürekli).
-
-### H6 — İleri yön ataleti yoktu: tack fiziksel olarak imkânsızdı
-Hız her adımda anında polar değerine eşitleniyordu. Pruva ölü açıya girdiği anda v = 0, dönüş hızı (v/L)·sin δ = 0 olduğundan tekne **sonsuza dek kilitleniyordu**; hiçbir rüzgar hızında rüzgar üstünden kontra değiştirilemiyordu (ψ₀ = 40°, δ = −35°: 3, 5, 8, 12 m/s'nin hepsinde son pruva 22°–29°, kilit).
-**Düzeltme:** Birinci derece surge dinamiği (τ = 3 s) eklendi; artık 8 ve 12 m/s'de tekne taşıdığı hızla ölü açıyı geçebiliyor, 3–5 m/s'de geçemiyor (bkz. §5.5).
-
-### H7 — Yanıltıcı yörünge etiketi
-Grafikteki `Rota: <son pruva> | <başlangıç hızı>` etiketi son pruvayı **başlangıç** hızıyla yan yana gösteriyordu. Artık "Son pruva | Ortalama hız (yol/süre)" gösteriliyor.
-
-### H8 — Test edilemez yapı ve yanlış yardım metni
-Fizik kodu Streamlit arayüzüyle aynı dosyadaydı (içe aktarıldığında arayüz çalışıyordu) ve aynı mantık iki kez yazılmıştı. Model `saildrone_model.py`'ye taşındı; `app.py` bu modeli kullanıyor. Pruva yardım metnindeki "270°: İskele Tam Apaz" ifadesi de "Sancak Kontra Tam Apaz" olarak düzeltildi.
-
----
-
-## 4. Matematiksel modeller
-
-### 4.1 Koordinatlar ve rüzgar
-
-* Dünya ekseni: x = Doğu, y = Kuzey (m). Pruva ψ: pusula açısı (0° = Kuzey, saat yönünde).
-* Rüzgar sabit, hızı U (m/s), **kuzeyden** eser.
-* Gerçek rüzgar açısı:  **TWA(ψ) = min(ψ mod 360, 360 − ψ mod 360)** ∈ [0°, 180°]
-* Rüzgar altı tarafı: s_lee = +1 (ψ ∈ (0°,180°], iskele kontra, yelken sancağa), −1 (ψ ∈ (180°,360°), sancak kontra), 0 (TWA ≤ 30°).
-
-### 4.2 Hız poları (parçalı sabit)
-
-Ölü açı: TWA ≤ 30° → ρ = 0. Diğer bantlar (TWA ∈ (alt, üst]):
-
-| Bant | TWA | NACA 0012 δ_opt / ρ | NACA 0015 δ_opt / ρ | Kumaş δ_opt / ρ |
-|---|---|---|---|---|
-| Orsa | 30–50° | 12° / 0.78 | 14° / 0.74 | 16° / 0.62 |
-| Dar apaz | 50–80° | 28° / 0.98 | 30° / 0.94 | 32° / 0.85 |
-| Tam apaz | 80–120° | 42° / **1.30** | 45° / 1.25 | 46° / 1.15 |
-| Geniş apaz | 120–150° | 62° / 0.98 | 64° / **1.05** | 65° / 0.92 |
-| Pupa | 150–180° | 78° / 0.58 | 80° / 0.65 | 82° / **0.74** |
-
-ρ = V_b / U (tekne hızının rüzgar hızına oranı), δ_opt = optimum bom açısı.
-
-![Hız poları](docs/figures/polar.png)
-
-### 4.3 Trim (yelken/kanat) verimi
-
-d = |δ_s − δ_opt| olmak üzere:
-
-```
-         ⎧ 1 − ℓ · d / d_tol                         , d ≤ d_tol           (tam trim)
-η(δ_s) = ⎨ max(η_min,u , 1 − (d / a_u)^p_u)          , δ_s < δ_opt         (fazla kasılı / stall)
-         ⎩ max(η_min,o , 1 − (d / a_o)^p_o)          , δ_s > δ_opt         (fazla açık / yapraklama)
-```
-
-| Profil | d_tol | ℓ | a_u, p_u, η_min,u | a_o, p_o, η_min,o |
-|---|---|---|---|---|
-| NACA 0012 | 4° | 0.04 | 20°, 1.9, 0.08 | 22°, 1.9, 0.06 |
-| NACA 0015 | 6° | 0.04 | 24°, 1.7, 0.12 | 26°, 1.7, 0.10 |
-| Kumaş | 6° | 0.05 | 25°, 1.6, 0.15 | 30°, 1.6, 0.10 |
-
-Auto-trim modunda δ_s ≡ δ_opt(TWA) → η = 1.
-
-![Trim verimi](docs/figures/trim_efficiency.png)
-
-### 4.4 Dümen sürüklemesi
-
-δ ∈ [−35°, +35°] (mekanik sınır),  **κ(δ) = 1 − 0.22 · (|δ| / 35°)²**
-
-### 4.5 Kararlı-durum (hedef) hız
-
-**V\*(ψ, δ_s, δ) = U · ρ(TWA(ψ)) · η(δ_s) · κ(δ)**
-
-### 4.6 İleri yön (surge) dinamiği — yeni
-
-**dv/dt = (V\* − v) / τ**,  τ = 3 s
-
-Ayrık zamanda tam üstel çözüm kullanılır (her Δt için koşulsuz kararlı):
-v_{k+1} = V\* + (v_k − V\*) · e^(−Δt/τ)
-
-### 4.7 Dönüş (yaw) dinamiği — kinematik bisiklet modeli + orsaya kaçma
-
-```
-          ⎧ (v / L) · sin δ · (180/π)  −  s_lee · ω_wh   , v > 0.2 m/s
-ψ̇ [°/s] = ⎨
-          ⎩ 0                                           , v ≤ 0.2 m/s   (dümen etkisiz)
-```
-L = 4.6 m, ω_wh = 0.35 °/s. Tam dümende dönüş yarıçapı R = L / sin 35° ≈ 8.0 m (dönüş hızı sınırına takılmadıkça).
-
-### 4.8 Konum kinematiği
-
-ẋ = v · sin ψ,  ẏ = v · cos ψ
-
-### 4.9 Sayısal entegrasyon (Δt = 0.25 s, yarı-örtük Euler)
-
-1. V\*_k = V\*(ψ_k, δ_s, δ_k) 2. v_{k+1} (4.6) 3. ψ_{k+1} = ψ_k + ψ̇(v_{k+1}, δ_k, ψ_k)·Δt 4. x, y ← x, y + v_{k+1}·(sin ψ_{k+1}, cos ψ_{k+1})·Δt
-
-τ = 0 seçildiğinde orijinal (ataletsiz) model elde edilir.
-
-### 4.10 Navigasyon (güdüm, manevra, dümen)
-
-**VMG ve kontra seçimi.** Hedef kerterizi β için her kontra (side ∈ {+1, −1}) üzerinde, ölü açıya 5° güvenlik payıyla:
-
-VMG_side = max_{TWA > 35°} U·ρ(TWA)·cos(ψ_side(TWA) − β),  ψ_{+1} = TWA, ψ_{−1} = 360° − TWA
-
-Polar tablosundan elde edilen optimum açılar:
-
-| Profil | Optimum rüzgar üstü TWA | VMG_up / U | Optimum rüzgar altı TWA | VMG_down / U | Tam pupa VMG / U |
-|---|---|---|---|---|---|
-| NACA 0012 | 30.5° | 0.672 | 150° | 0.849 | 0.580 |
-| NACA 0015 | 30.5° | 0.638 | 150° | 0.909 | 0.650 |
-| Kumaş | 50.5° | 0.541 | 150° | 0.797 | 0.740 |
-
-(Navigasyonda 5° pay nedeniyle sert kanatlar fiilen TWA ≈ 35.5°'de orsa yapar.) Tam pupa hiçbir profilde VMG-optimum değildir; rüzgar altı hedeflere de zikzakla (gybe) gidilir.
-
-**Kontra değiştirme kuralı.** Diğer kontranın VMG'si daha büyükse ve
-(a) mevcut kontranın VMG'si ≤ 0 ise (hedef geride kaldı), ya da asgari bacak süresi (10 s) dolmuşken
-(b) **layline**: diğer kontranın optimum rotası hedefi tutuyorsa (rüzgar üstünde hedef o rotanın rüzgar üstünde değil; rüzgar altında rüzgar altında değil), veya
-(c) **koridor**: başlangıç–hedef hattından |e_ct| > W (W = 0.2·D, [50, 1000] m) uzaklaşılmış ve hâlâ uzaklaşılıyorsa
-kontra değiştirilir.
-
-**Tack fizibilitesi.** Ölü açıda V\* = 0 olduğundan hız v₀·e^(−t/τ) ile söner; tam dümende dönülebilecek açı:
-
-**Θ_max = ∫₀^∞ (v₀ e^(−t/τ) / L) sin δ_max dt = v₀ · τ · sin δ_max / L**
-
-Tack için Θ_max ≥ 1.3 · (2·30° + 5°) gerekir ⇒ **v₀ ≥ 3.03 m/s**. Bu analitik ön koşul sağlansa bile karar, manevranın aynı dümen yasasıyla **ileri simülasyonu** ile kesinleştirilir. Tack mümkün değilse tekne rüzgar altından ~290° dönerek kontra değiştirir; bu durumda değişim, manevra **sonrası** konumdan hedefin tutulabildiği ileri simülasyonla doğrulanınca yapılır.
-
-**Dümen kontrolcüsü (ters kinematik).** e = ψ\* − ψ (manevra yönüne göre işaretli),
-
-r\* = sat(k·e, ±30 °/s) + s_lee·ω_wh,  **δ = sat(asin(r\*·L / v), ±35°)**, k = 0.5 s⁻¹
-
-Doymasız bölgede kapalı çevrim ė = −k·e olur (zaman sabiti 2 s, hızdan bağımsız); ayrık sistemde e_{k+1} = (1 − kΔt)·e_k = 0.875·e_k ⇒ kararlı. Orsaya kaçma ileri beslemeyle telafi edildiğinden kalıcı durum hatası yoktur.
-
-**Başarı / başarısızlık ölçütleri.** Varış: ‖p − p_hedef‖ ≤ r_varış (varsayılan 10 m). Başarısızlık: süre sınırı (varsayılan 7200 s) aşımı veya ölü açıda v < 0.05 m/s ile 20 s kalma.
-
-### 4.11 Parametreler
-
-| Sembol | Değer | Açıklama |
-|---|---|---|
-| θ_ng | 30° | Ölü açı yarı genişliği |
-| L | 4.6 m | Efektif gövde boyu (dönüş) |
-| δ_max | 35° | Dümen sınırı |
-| τ | 3 s | Surge zaman sabiti (**varsayım**, yeni) |
-| ω_wh | 0.35 °/s | Orsaya kaçma |
-| Δt | 0.25 s | Entegrasyon adımı |
-| k | 0.5 s⁻¹ | Pruva kontrol kazancı |
-| r_varış | 10 m | Varış yarıçapı |
-
----
-
-## 5. Testler ve sonuçlar
-
-### 5.1 Birim testleri (174/174 ✔)
-
-`tests/test_model.py` — ölü açıda itki sıfır; iskele/sancak simetrisi (sınırlar dahil); kontra isimlendirmesi; trim verimi tepe değeri ve sınırları; dümen cezası; **düz seyirde yol = hız × süre**; telemetri hızı = dinamik hızı; pozitif dümen → sancağa dönüş; orsaya kaçma yönü; ölü açıda başlayan tekne hareketsiz; surge yakınsaması; auto-trim'in dönüş boyunca yeniden trim yapması.
-
-`tests/test_navigation.py` — 72 senaryonun tamamı; dümen sınırına uyum ve ölü açıda geçirilen sürenin < %5 olması; rüzgar üstünde tack gerekliliği; hafif rüzgarda gybe ile kontra değişimi; ölü açıda başlangıcın başarısızlık olarak raporlanması; sıfır mesafe; süre sınırı; 10 km uzun menzil; 12 yönde erişilebilirlik; tack fizibilite eşiği; layline geometrisi.
-
-### 5.2 Başlangıç → hedef senaryo matrisi (72/72 ✔)
-
-Senaryolar (rüzgar kuzeyden, mesafeler ≈ 1–1.4 km):
-S1 (0,0)→(1000,0) tam apaz · S2 (0,0)→(0,−1000) tam rüzgar altı · S3 (0,0)→(700,700) · S4 (0,0)→(0,1000) tam rüzgar üstü · S5 (0,0)→(300,1000) ölü açı içinde (017°) · S6 (500,−300)→(−400,800) ofset başlangıç.
-
-Hedefe varış süreleri:
-
-| Profil | U (m/s) | S1 | S2 | S3 | S4 | S5 | S6 |
-|---|---|---|---|---|---|---|---|
-| NACA 0012 | 1 | ✔ 762 s | ✔ 1663 s | ✔ 1394 s | ✔ 1952 s | ✔ 1892 s | ✔ 2004 s |
-| NACA 0012 | 3 | ✔ 254 s | ✔ 458 s | ✔ 466 s | ✔ 653 s | ✔ 632 s | ✔ 670 s |
-| NACA 0012 | 8 | ✔ 95 s | ✔ 164 s | ✔ 164 s | ✔ 211 s | ✔ 218 s | ✔ 239 s |
-| NACA 0012 | 15 | ✔ 51 s | ✔ 86 s | ✔ 128 s | ✔ 118 s | ✔ 124 s | ✔ 133 s |
-| NACA 0015 | 1 | ✔ 792 s | ✔ 1508 s | ✔ 1457 s | ✔ 2056 s | ✔ 1990 s | ✔ 2100 s |
-| NACA 0015 | 3 | ✔ 264 s | ✔ 460 s | ✔ 488 s | ✔ 688 s | ✔ 665 s | ✔ 700 s |
-| NACA 0015 | 8 | ✔ 99 s | ✔ 176 s | ✔ 173 s | ✔ 221 s | ✔ 254 s | ✔ 250 s |
-| NACA 0015 | 15 | ✔ 53 s | ✔ 98 s | ✔ 114 s | ✔ 125 s | ✔ 128 s | ✔ 138 s |
-| Kumaş | 1 | ✔ 861 s | ✔ 1357 s | ✔ 1668 s | ✔ 2419 s | ✔ 2312 s | ✔ 2419 s |
-| Kumaş | 3 | ✔ 287 s | ✔ 453 s | ✔ 559 s | ✔ 808 s | ✔ 772 s | ✔ 809 s |
-| Kumaş | 8 | ✔ 108 s | ✔ 171 s | ✔ 198 s | ✔ 258 s | ✔ 268 s | ✔ 288 s |
-| Kumaş | 15 | ✔ 58 s | ✔ 92 s | ✔ 113 s | ✔ 163 s | ✔ 144 s | ✔ 160 s |
-
-Rota verimi (düz mesafe / katedilen yol): S1 ≈ 1.0 · S2 0.87 · S3 0.72 · S4 0.63 · S5 0.64 · S6 0.76 (ortalamalar). Yol, hız, tack/gybe sayılarıyla tam tablo: [docs/results/scenario_matrix.md](docs/results/scenario_matrix.md) ve `.csv`.
-
-Gözlemler:
-* **Tam apaz en hızlı** yön; tam rüzgar üstü hedef aynı mesafe için ~2.2×, tam rüzgar altı ~1.7× daha uzun sürüyor.
-* Tam rüzgar altında (S2) kumaş yelken düşük rüzgarda en hızlı (1 m/s: 1357 s vs 1508–1663 s; 3 m/s: 453 s vs 458–460 s); 8–15 m/s'de NACA 0012 öne geçiyor (164 s vs 171–176 s). Rüzgar üstünde ve apazlarda NACA 0012 en iyi; tek istisna S3 / 15 m/s (0012 hedef yakınında ek bir manevra yaptığı için 128 s, kumaş 113 s).
-* 1 ve 3 m/s'de tekne hızı < 3 m/s olduğundan **tack hiç yapılamıyor**; kontra değişimleri rüzgar altından dönülerek yapılıyor ve görev yine tamamlanıyor.
-
-![Rotalar, U = 8 m/s](docs/figures/trajectories_U8.png)
-
-![Hafif ve kuvvetli rüzgarda tam rüzgar üstü](docs/figures/upwind_light_vs_strong.png)
-
-![S4 zaman serileri](docs/figures/timeseries_S4_U8.png)
-
-### 5.3 360° erişilebilirlik (144/144 ✔)
-
-1 km yarıçaplı çember üzerinde 15°'de bir 24 hedef, 3 profil, 3 ve 8 m/s. Grafik, "etkin VMG = 1000 m / varış süresi" değerini gösterir; ölü açı yönündeki hedefler (000°, 015°, 345°) en yavaş, tam apaz yönleri en hızlıdır. Tablo: [docs/results/reachability.md](docs/results/reachability.md).
-
-![Erişilebilirlik](docs/figures/reachability.png)
-
-### 5.4 Uç durumlar
-
-| Durum | Ulaştı | Süre (s) | Tack | Gybe | Sonuç |
-|---|---|---|---|---|---|
-| Başlangıç pruvası ölü açıda (000°), hedef Doğu 1 km, 8 m/s | ✘ | 20 | 0 | 0 | Ölü açıda takıldı — hız sıfır, dümen etkisiz |
-| Başlangıç pruvası ölü açı sınırında (032°), hedef Kuzey 1 km | ✔ | 211 | 3 | 0 | — |
-| Başlangıç pruvası ters yönde (180°), hedef Kuzey 1 km | ✔ | 240 | 5 | 1 | — |
-| Tack yasak, varış yarıçapı 10 m, Kuzey 1 km, 8 m/s | ✘ | 7200 | 0 | 458 | Süre sınırı (hedef çevresinde döngü) |
-| Tack yasak, varış yarıçapı 30 m, Kuzey 1 km, 8 m/s | ✔ | 252 | 0 | 2 | — |
-| Hafif rüzgar 2 m/s (tack fiziksel olarak imkânsız), Kuzey 1 km | ✔ | 976 | 0 | 2 | — |
-| Hedef başlangıçta (mesafe 0) | ✔ | 0 | 0 | 0 | — |
-| Uzun menzil: Kuzey 10 km, 5 m/s, kumaş | ✔ | 4485 | 2 | 3 | — |
-| Kısa süre limiti: Kuzey 1 km, 3 m/s, 300 s | ✘ | 300 | 0 | 0 | Süre sınırı |
-
-### 5.5 Tack eşiği (açık çevrim, TWA 35° + tam dümen)
-
-| Profil | Tack için asgari rüzgar | Tack başlangıç hızı | Analitik v_min |
-|---|---|---|---|
-| NACA 0012 | 5.2 m/s | 3.16 m/s | 3.03 m/s |
-| NACA 0015 | 5.4 m/s | 3.12 m/s | 3.03 m/s |
-| Kumaş | 6.5 m/s | 3.14 m/s | 3.03 m/s |
-
-Simülasyonla bulunan eşik hızı analitik formülle (§4.10) %3–5 içinde uyuşuyor; fark, ölü açıya girmeden önceki (dümen sürüklemeli) yavaşlamadan kaynaklanıyor.
-
-### 5.6 Tack yapılamıyorsa: varış yarıçapı duyarlılığı (NACA 0012, Kuzey 1 km)
-
-| Varış yarıçapı (m) | U=3 | U=5 | U=8 | U=12 | U=15 |
-|---|---|---|---|---|---|
-| *Dönüş çapı 2R (m)* | *16* | *16* | *24* | *36* | *45* |
-| 10 | ✔ 653 s | ✔ 520 s | ✘ | ✘ | ✘ |
-| 15 | ✔ 650 s | ✔ 392 s | ✘ | ✘ | ✘ |
-| 20 | ✔ 648 s | ✔ 390 s | ✔ 269 s | ✘ | ✘ |
-| 25 | ✔ 646 s | ✔ 389 s | ✔ 253 s | ✘ | ✘ |
-| 30 | ✔ 644 s | ✔ 388 s | ✔ 252 s | ✔ 179 s | ✘ |
-| 40 | ✔ 610 s | ✔ 368 s | ✔ 250 s | ✔ 177 s | ✔ 147 s |
-
-Kural: rüzgar altından dönüşle hedefe rüzgar üstünden yaklaşılıyorsa **r_varış ≳ 0.8 · 2R** olmalıdır; aksi halde manevranın kendisi tekneyi hedefin rüzgar altına iter ve hedef çevresinde döngü oluşur. Normal modda (tack serbest) bu durum yalnızca tekne hızı < 3 m/s iken oluşur; o hızlarda R ≈ 8 m olduğundan varsayılan 10 m yarıçap yeterlidir (72/72 sonucu bunu doğrular).
-
----
-
-## 6. Sonuç: Saildrone belirtilen konumdan istenen konuma gidebilir mi?
-
-Düzeltilmiş model ve eklenen navigasyon kontrolcüsü ile **evet**: test edilen 216 başlangıç–hedef–profil–rüzgar kombinasyonunun (72 senaryo + 144 erişilebilirlik) tamamında tekne hedefe ulaştı; hedef ölü açı içinde olsa bile zikzakla (tack veya gybe) gidebiliyor.
-
-Ulaşılamayan durumlar ve nedenleri:
-
-1. **Başlangıç pruvası ölü açıda (TWA ≤ 30°) ve tekne durgun** → itki ve dümen etkisi sıfır, model bu durumdan çıkış mekanizması içermiyor (gerçek teknede yelkeni ters basma / rüzgarla sürüklenme ile çıkılır).
-2. **Süre sınırı** mesafe / etkin VMG'den kısaysa (ör. 1 km rüzgar üstü, 3 m/s: ≈ 650 s gerekirken 300 s).
-3. **Tack mümkün değil ve varış yarıçapı dönüş çapından küçük** (§5.6).
-
-Orijinal kodla ise **rüzgar üstündeki hiçbir hedefe kontra değiştirerek gidilemezdi** (H6: ölü açıya giren tekne kalıcı olarak kilitlenir), üstelik ekranda gösterilen hız ile gidilen yol farklı formüllerden hesaplandığı için (H3) süre tahminleri de tutarsızdı.
-
----
-
-## 7. Model sınırlamaları ve öneriler
-
-| Sınırlama | Etkisi | Öneri |
-|---|---|---|
-| Parçalı sabit polar (bant sınırlarında sıçrama) | VMG-optimum pruvalar hep bant kenarlarına (30.5°, 50.5°, 80.5°, 150°) düşer | Poları TWA'ya göre sürekli (spline) yapmak |
-| V_b ∝ U (doygunluk yok) | 25 m/s rüzgarda 32.5 m/s (63 knot) tekne hızı — gerçekçi değil; gerçek Saildrone ≈ 2–4 knot | Hız oranını rüzgarla azalan / doyuran bir polar; reef / kanat açısı sınırlaması |
-| Sürüklenme (leeway), akıntı, dalga yok | Rota yere göre değil suya göre | Leeway açısı ve akıntı vektörü eklemek |
-| Sabit rüzgar yönü/hızı | Kontra stratejisi gerçek koşullarda test edilmedi | Rüzgar salınımı ve hamle (gust) modeli |
-| Dönüşte yaw ataleti yok (kinematik) | Manevralar gerçekte daha yavaş | 2. derece yaw dinamiği (I_z ṙ = N_δ δ − N_r r) |
-| Ölü açıda durgun tekne kurtulamaz | Uç durum 1 | "Backing / drift" modeli (rüzgarın pruvayı düşürmesi) |
-| τ = 3 s varsayımdır | Tack eşiğini doğrudan belirler (v_min ∝ 1/τ) | Gerçek tekne verisiyle tanımlama (system identification) |
-
----
-
-## 8. Yeniden üretme
-
-```bash
-python analysis/legacy_bug_evidence.py
-```
-```bash
-python analysis/run_experiments.py
-```
-```bash
-python -m pytest -q
-```
-
-Tüm grafikler `docs/figures/`, tüm tablolar `docs/results/` altına yeniden yazılır. Arayüzdeki **🎯 Hedefe Navigasyon** sekmesinde başlangıç/hedef koordinatları, rüzgar, profil, başlangıç pruvası, varış yarıçapı ve süre sınırı girilerek aynı test etkileşimli olarak çalıştırılabilir.
+| H1 | Kontra adları ters (doğuya giden teknede "Sancak Kontra") | Ad, rüzgarın geldiği bordadan üretiliyor |
+| H2 | İskele/sancak sınır asimetrisi (aynı TWA farklı bant) | Önce $\theta$ hesaplanıp tek bant tablosu kullanılıyor |
+| H3 | Ekrandaki hız ile simülasyondaki hız farklı formüllerden (≈ %47'ye varan fark) | Tek `trim_efficiency()` fonksiyonu |
+| H4 | Auto-trim dönüşte yeniden trim yapmıyordu | Bom her adımda optimuma geliyor |
+| H5 | Orsaya kaçma, dümen 2°'nin altındayken açılıp kapanıyordu (süreksiz) | Moment her zaman var, dümen karşılıyor |
+| H6 | İleri yön ataleti yoktu: ölü açıya giren tekne kilitleniyordu, tack imkânsızdı | Surge dinamiği ($\tau$ = 3 s) |
+| H7 | Yörünge etiketi son pruvayı başlangıç hızıyla gösteriyordu | "Son pruva / ortalama hız" |
+| H8 | Fizik kodu arayüzle iç içeydi (test edilemez) | `saildrone_model.py`, `navigation.py` ayrıldı |

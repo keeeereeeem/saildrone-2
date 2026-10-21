@@ -8,10 +8,10 @@ PROFILES = m.PROFILE_KEYS
 
 @pytest.mark.parametrize("h", [0, 10, 30, 330, 345, 359.9, 360])
 def test_no_go_zone_has_zero_thrust(h):
-    regime, opt, ratio, tack, _, lee, _ = m.analyze_points_of_sail_360(h, "NACA 0012")
+    regime, opt, ratio, tack, _, lee, _ = m.analyze_points_of_sail_360(h, "Kumaş Yelken")
     assert regime == m.NO_GO_REGIME
     assert ratio == 0.0 and lee == 0.0
-    assert m.target_speed(h, 40, 0, "0012", 8.0) == 0.0
+    assert m.target_speed(h, 40, 0, "cloth", 8.0) == 0.0
 
 
 @pytest.mark.parametrize("profile", PROFILES)
@@ -60,21 +60,21 @@ def test_straight_run_distance_equals_speed_times_time(profile, h):
 def test_manual_trim_speed_matches_telemetry_formula():
     """Açık çevrimdeki hız ile anlık telemetri hızı aynı verim fonksiyonunu kullanmalı."""
     for sail in [0, 20, 38, 42, 46, 60, 90]:
-        v_tel = 8.0 * 1.30 * m.trim_efficiency(sail, 42.0, "0012")[0]
-        r = m.simulate_open_loop(90, sail, 0, "0012", 8.0, 1.0, tau=0.0)
+        v_tel = 8.0 * 1.15 * m.trim_efficiency(sail, 46.0, "cloth")[0]
+        r = m.simulate_open_loop(90, sail, 0, "cloth", 8.0, 1.0, tau=0.0)
         assert r["v0"] == pytest.approx(v_tel)
 
 
 def test_positive_rudder_turns_to_starboard():
-    r = m.simulate_open_loop(90, 42, 15, "0012", 8.0, 2.0)
+    r = m.simulate_open_loop(90, 46, 15, "cloth", 8.0, 2.0)
     assert m.wrap180(r["final_heading"] - 90) > 0
-    r = m.simulate_open_loop(90, 42, -15, "0012", 8.0, 2.0)
+    r = m.simulate_open_loop(90, 46, -15, "cloth", 8.0, 2.0)
     assert m.wrap180(r["final_heading"] - 90) < 0
 
 
 @pytest.mark.parametrize("h", [60, 120, 240, 300])
 def test_weather_helm_rounds_up_into_wind(h):
-    r = m.simulate_open_loop(h, 0, 0, "0012", 8.0, 10.0, auto_trim=True)
+    r = m.simulate_open_loop(h, 0, 0, "cloth", 8.0, 10.0, auto_trim=True)
     assert m.true_wind_angle(r["final_heading"]) < m.true_wind_angle(h)
 
 
@@ -86,12 +86,12 @@ def test_start_in_irons_never_moves():
 def test_surge_lag_converges_to_target_speed():
     s = m.BoatState(0, 0, 90.0, 0.0)
     for _ in range(200):
-        s = m.step(s, 0, 0, "0012", 8.0, auto_trim=True, tau=3.0)
-    assert s.v == pytest.approx(m.target_speed(s.psi, 0, 0, "0012", 8.0, True), rel=1e-3)
+        s = m.step(s, 0, 0, "cloth", 8.0, auto_trim=True, tau=3.0)
+    assert s.v == pytest.approx(m.target_speed(s.psi, 0, 0, "cloth", 8.0, True), rel=1e-3)
 
 
 def test_auto_trim_retrims_when_heading_changes():
     """Auto-trim'de dönüş boyunca verim 1 kalmalı (eski kod başlangıç açısında donduruyordu)."""
-    auto = m.simulate_open_loop(60, 0, 20, "0012", 8.0, 20.0, auto_trim=True)
-    fixed = m.simulate_open_loop(60, 28, 20, "0012", 8.0, 20.0, auto_trim=False)
+    auto = m.simulate_open_loop(60, 0, 20, "cloth", 8.0, 20.0, auto_trim=True)
+    fixed = m.simulate_open_loop(60, 32, 20, "cloth", 8.0, 20.0, auto_trim=False)
     assert auto["distance"] > fixed["distance"]
