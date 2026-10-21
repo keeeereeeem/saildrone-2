@@ -95,3 +95,44 @@ def test_auto_trim_retrims_when_heading_changes():
     auto = m.simulate_open_loop(60, 0, 20, "cloth", 8.0, 20.0, auto_trim=True)
     fixed = m.simulate_open_loop(60, 32, 20, "cloth", 8.0, 20.0, auto_trim=False)
     assert auto["distance"] > fixed["distance"]
+
+
+@pytest.mark.parametrize("h,sail,rud", [(90, 46, 0), (90, 30, 15), (50.5, 32, -10), (150, 65, 5), (270, 46, 20)])
+def test_force_balance_at_steady_speed(h, sail, rud):
+    """Kararlı hızda yelken itkisi = dümen sürüklemesi + gövde direnci (net ileri kuvvet sıfır)."""
+    f = m.force_moment_breakdown(h, sail, rud, 8.0)
+    assert f["net"] == pytest.approx(0.0, abs=1e-9)
+    assert f["drive"] == pytest.approx(f["rudder_drag"] + f["hull_drag"])
+    assert f["v"] == pytest.approx(m.target_speed(h, sail, rud, "cloth", 8.0))
+
+
+def test_net_force_gives_surge_equation():
+    """Hız V*'dan düşükse net kuvvet m·(V*−v)/τ kadar ileri yönlüdür."""
+    f = m.force_moment_breakdown(90, 46, 0, 8.0, speed_ms=4.0)
+    assert f["net"] == pytest.approx(m.PHYS.mass * (f["v_star"] - 4.0) / m.TAU_SURGE)
+    assert f["accel"] == pytest.approx((f["v_star"] - 4.0) / m.TAU_SURGE)
+
+
+def test_sail_force_components():
+    f = m.force_moment_breakdown(90, 46, 0, 8.0)
+    assert f["drive"] == pytest.approx(f["normal"] * np.sin(np.radians(46)))
+    assert f["side"] == pytest.approx(f["normal"] * np.cos(np.radians(46)))
+    assert f["va"] == pytest.approx(np.hypot(8.0, f["v"]))           # tam apazda görünür rüzgar
+
+
+def test_moment_signs_and_balance():
+    port = m.force_moment_breakdown(90, 46, 0, 8.0)                  # iskele kontra
+    stbd = m.force_moment_breakdown(270, 46, 0, 8.0)                 # sancak kontra
+    assert port["sail_moment"] < 0 < stbd["sail_moment"]            # her iki kontrada rüzgara döndürür
+    assert port["rudder_balance"] > 0 > stbd["rudder_balance"]
+    # dengeleyici dümen açısı simülasyondaki kalıcı dümen açısıyla aynı mertebede (kalibrasyon noktası)
+    dss = np.degrees(np.arcsin(np.radians(m.WEATHER_HELM_DPS) * m.L_HULL / port["v"]))
+    assert port["rudder_balance"] == pytest.approx(dss, rel=0.1)
+    turn = m.force_moment_breakdown(90, 46, 20, 8.0)
+    assert turn["rudder_moment"] > 0 and turn["net_moment"] > 0 and turn["yaw_rate"] > 0
+    assert turn["centripetal"] == pytest.approx(m.PHYS.mass * turn["v"] ** 2 / turn["turn_radius"])
+
+
+def test_no_force_in_irons():
+    f = m.force_moment_breakdown(10, 40, 0, 8.0)
+    assert f["drive"] == 0.0 and f["normal"] == 0.0 and f["side"] == 0.0 and f["v"] == 0.0

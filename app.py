@@ -548,6 +548,35 @@ with tab_free:
 
         st.markdown(f"**ℹ️ Seyir & Aerodinamik Durumu:** {tel['regime_desc']}")
 
+        with st.expander("🧮 Kuvvet ve Moment Hesabı (kararlı hızda, N ve N·m)", expanded=False):
+            fm = sm.force_moment_breakdown(boat_heading_val, sail_angle_val, rudder_angle_val,
+                                           float(wind_speed_val), auto_trim=auto_trim_active)
+            P = sm.PHYS
+            if fm["drive"] == 0.0:
+                st.warning("Tekne ölü açıda: yelken yapraklıyor, itki ve yelken kuvveti sıfır; hız olmadığı için dümen de moment üretmez.")
+            else:
+                st.markdown(f"""
+| Adım | Formül | Değer |
+|---|---|---|
+| Görünür rüzgar | $V_A=\\sqrt{{v^2+U^2+2vU\\cos\\psi}}$ | {fm['va']:.2f} m/s, AWA {fm['awa']:.0f}° |
+| Yelken itkisi | $T=\\frac{{m}}{{\\tau}}U\\rho\\eta$ | **{fm['drive']:.0f} N** (η = {fm['eta']:.2f}) |
+| Yelken toplam kuvveti (kirişe dik) | $F_N=T/\\sin\\delta_s$ | {fm['normal']:.0f} N (C_N = {fm['c_n']:.2f}) |
+| Yan kuvvet (rüzgar altına) | $F_{{yan}}=F_N\\cos\\delta_s$ | {fm['side']:.0f} N |
+| Gövde direnci | $R=\\frac{{m}}{{\\tau}}v$ | {fm['hull_drag']:.0f} N |
+| Dümen sürüklemesi | $D_d=T(1-\\kappa)$ | {fm['rudder_drag']:.0f} N |
+| Net ileri kuvvet | $T-D_d-R$ | {fm['net']:.0f} N → v = {fm['v']:.2f} m/s |
+| Dümen yan kuvveti | $Y=\\tfrac12\\rho_{{su}}A_dC_L(\\delta_r)v^2$ | {fm['rudder_force']:.0f} N (C_L = {fm['rudder_cl']:.2f}) |
+| Dümen momenti | $N_d=Y\\,x_d$ | **{fm['rudder_moment']:.0f} N·m** |
+| Yelken momenti (orsaya kaçma) | $N_y=-s\\,F_{{yan}}\\,e$ | {fm['sail_moment']:.0f} N·m |
+| Net dönme momenti | $N_d+N_y$ | **{fm['net_moment']:.0f} N·m** (+: sancağa) |
+| Dönüş | $\\dot\\psi$, $R=v/\\dot\\psi$ | {fm['yaw_rate']:+.1f} °/s, R = {('∞' if fm['turn_radius'] > 1e3 else f"{fm['turn_radius']:.1f} m")} |
+| Gereken merkezcil kuvvet | $F_c=m\\,v\\,\\dot\\psi$ | {fm['centripetal']:.0f} N |
+| Orsaya kaçmayı dengeleyen dümen | $\\delta_{{r,denge}}$ | {fm['rudder_balance']:+.2f}° |
+""")
+            st.caption(f"Varsayılan fiziksel parametreler: m = {P.mass:.0f} kg, yelken alanı {P.sail_area:.0f} m², "
+                       f"dümen alanı {P.rudder_area:.2f} m², x_d = {P.rudder_arm:.1f} m, e = {P.ce_offset:.2f} m, τ = {sm.TAU_SURGE:.0f} s. "
+                       "Kuvvetler, simülasyonun hız ve dönüş denklemlerinden bu parametrelerle türetilir.")
+
 
 
 # --- HEDEFE NAVİGASYON SEKMESİ ---

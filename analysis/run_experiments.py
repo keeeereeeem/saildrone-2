@@ -336,6 +336,84 @@ def reachability():
     return total, len(bearings) * len(data)
 
 
+def force_tables():
+    """Kuvvet ve moment tabloları (U = 8 m/s, kararlı hız) ve kuvvet diyagramı."""
+    U = 8.0
+    P = m.PHYS
+    out = [f"Parametreler: m = {P.mass:.0f} kg, A_yelken = {P.sail_area:.0f} m², A_dümen = {P.rudder_area:.2f} m², "
+           f"C_Lα = {P.rudder_cla:.2f} 1/rad, x_d = {P.rudder_arm:.1f} m, e = {P.ce_offset:.2f} m, τ = {m.TAU_SURGE:.0f} s, U = {U:.0f} m/s\n"]
+    out += ["### Seyir bantlarına göre yelken kuvvetleri (auto-trim, δr = 0)\n",
+            "| ψ (°) | Seyir | δs (°) | V* (m/s) | V_A (m/s) | AWA (°) | T itki (N) | F_N (N) | F_yan (N) | C_N | N_yelken (N·m) | δr denge (°) |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for h in (35.5, 50.5, 90.0, 135.0, 165.0):
+        f = m.force_moment_breakdown(h, 0, 0, U, auto_trim=True)
+        name = m.BANDS[m.band_index(f["twa"])][2]
+        out.append(f"| {h:.1f} | {name} | {f['sail']:.0f} | {f['v']:.2f} | {f['va']:.2f} | {f['awa']:.0f} | {f['drive']:.0f} | "
+                   f"{f['normal']:.0f} | {f['side']:.0f} | {f['c_n']:.2f} | {f['sail_moment']:.0f} | {f['rudder_balance']:+.2f} |")
+    out += ["\n### Yelken trimi (ψ = 90°, δr = 0)\n",
+            "| δs (°) | η | V* (m/s) | T itki (N) | F_N (N) | F_yan (N) |", "|---|---|---|---|---|---|"]
+    for sail in (20, 30, 46, 60, 75):
+        f = m.force_moment_breakdown(90, sail, 0, U)
+        out.append(f"| {sail} | {f['eta']:.2f} | {f['v']:.2f} | {f['drive']:.0f} | {f['normal']:.0f} | {f['side']:.0f} |")
+    out += ["\n### Dümen kuvveti ve dönme momenti (ψ = 90°, δs = 46°)\n",
+            "| δr (°) | κ | v (m/s) | D_dümen (N) | C_L | Y_dümen (N) | N_dümen (N·m) | N_net (N·m) | ψ̇ (°/s) | R (m) | F_merkezcil (N) |",
+            "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for rud in (0, 5, 10, 20, 35):
+        f = m.force_moment_breakdown(90, 46, rud, U)
+        R = "∞" if not np.isfinite(f["turn_radius"]) or f["turn_radius"] > 1e3 else f"{f['turn_radius']:.1f}"
+        out.append(f"| {rud:+d} | {f['kappa']:.3f} | {f['v']:.2f} | {f['rudder_drag']:.0f} | {f['rudder_cl']:.2f} | {f['rudder_force']:.0f} | "
+                   f"{f['rudder_moment']:.0f} | {f['net_moment']:.0f} | {f['yaw_rate']:+.1f} | {R} | {f['centripetal']:.0f} |")
+    md = "\n".join(out) + "\n"
+    with open(os.path.join(RES, "forces.md"), "w", encoding="utf-8") as fh:
+        fh.write(md)
+
+    # Kuvvet diyagramı: tam apaz, δs = 46°, δr = +10° (tekne doğuya gidiyor; çizim gövde eksenlerinde, pruva yukarı)
+    f = m.force_moment_breakdown(90, 46, 10, U)
+    fig, ax = plt.subplots(figsize=(7.2, 7.2))
+    for cx in (-1.35, 1.35):
+        ax.add_patch(plt.Polygon([(cx, 2.2), (cx + .22, 1.3), (cx + .22, -1.5), (cx + .12, -2.1), (cx - .12, -2.1),
+                                  (cx - .22, -1.5), (cx - .22, 1.3)], color="#1e293b"))
+    for by in (1.3, -1.4):
+        ax.plot([-1.35, 1.35], [by, by], color="#475569", lw=4)
+    d = np.radians(46.0)
+    mast = np.array([0.0, 0.2])
+    boom = mast + 2.85 * np.array([np.sin(d), -np.cos(d)])
+    ax.plot(*zip(mast, boom), color="#2563eb", lw=4)
+    ce = mast + 0.5 * (boom - mast)
+    sc = 2.2 / f["normal"]                                     # ok ölçeği (m / N)
+
+    def arrow(p, vec, color, text, off=(0.1, 0.1)):
+        ax.annotate("", xy=(p[0] + vec[0], p[1] + vec[1]), xytext=p,
+                    arrowprops=dict(arrowstyle="-|>", color=color, lw=2.4, mutation_scale=16))
+        ax.text(p[0] + vec[0] + off[0], p[1] + vec[1] + off[1], text, color=color, fontsize=9, fontweight="bold")
+
+    n_dir = np.array([np.cos(d), np.sin(d)])                  # kirişe dik, rüzgar altına (sancak) ve ileri
+    arrow(ce, f["normal"] * sc * n_dir, "#7c3aed", f"F_N = {f['normal']:.0f} N")
+    arrow(ce, (0, f["drive"] * sc), "#16a34a", f"T = F_N·sin δs = {f['drive']:.0f} N", off=(-2.6, 0.15))
+    arrow(ce, (f["side"] * sc, 0), "#d97706", f"F_yan = F_N·cos δs = {f['side']:.0f} N", off=(-0.6, -0.35))
+    arrow((0, -2.3), (0, -f["hull_drag"] * sc), "#64748b", f"R_gövde = {f['hull_drag']:.0f} N", off=(0.15, 0))
+    for cx in (-1.35, 1.35):
+        hinge = np.array([cx, -2.1])
+        r = np.radians(10.0)
+        ax.plot(*zip(hinge, hinge + 0.95 * np.array([np.sin(r), -np.cos(r)])), color="#dc2626", lw=4)
+    arrow((1.35, -2.6), (-f["rudder_force"] * sc * 0.25, 0), "#dc2626",
+          f"Y_dümen = {f['rudder_force']:.0f} N (ok ¼ ölçek)\nN_dümen = Y·x_d = {f['rudder_moment']:.0f} N·m", off=(-3.2, -0.75))
+    for wy in (0.6, 1.2, 1.8):                               # rüzgar kuzeyden = iskele bordadan (gövde ekseninde soldan)
+        ax.annotate("", xy=(-2.6, wy), xytext=(-4.2, wy), arrowprops=dict(arrowstyle="->", color="#0284c7", lw=2.2))
+    ax.text(-3.4, 2.2,f"gerçek rüzgar U = {U:.0f} m/s\n(iskele bordadan, TWA 90°)", ha="center", fontsize=8, color="#0369a1")
+    ax.text(0, 2.5, "PRUVA (ψ = 090°)", ha="center", fontsize=9, fontweight="bold")
+    ax.set_title(f"Kuvvet diyagramı – tam apaz, δs = 46°, δr = +10°, v = {f['v']:.2f} m/s\n"
+                 f"Net moment {f['net_moment']:.0f} N·m → ψ̇ = {f['yaw_rate']:.1f} °/s, R = {f['turn_radius']:.1f} m", fontsize=10)
+    ax.set_xlim(-4.6, 4.8)
+    ax.set_ylim(-4.0, 3.0)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    fig.tight_layout()
+    fig.savefig(os.path.join(FIG, "force_diagram.png"), dpi=130)
+    plt.close(fig)
+    return md
+
+
 def main():
     fig_polar()
     fig_trim()
@@ -346,6 +424,7 @@ def main():
     gs = gybe_only_sweep()
     fig_trajectories()
     waypoint_route()
+    force_tables()
     ok, n = reachability()
     with open(os.path.join(RES, "summary.md"), "w", encoding="utf-8") as f:
         f.write("### VMG optimumları\n\n" + vt + "\n\n### Tack eşiği\n\n" + tt + "\n\n### Uç durumlar\n\n" + ec

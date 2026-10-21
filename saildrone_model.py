@@ -237,3 +237,91 @@ def simulate_open_loop(heading_deg, sail_deg, rudder_deg, profile, wind_ms, sim_
         dist += s.v * dt
     return dict(x=np.array(xs), y=np.array(ys), psi=np.array(psis), v=np.array(vs),
                 distance=dist, final_heading=s.psi, v0=vs[0])
+
+
+# --- KUVVET VE MOMENT HESABI (fiziksel yorum) ---
+# Simülasyon hız poları ve kinematik dönüşle çalışır. Aşağıdaki fonksiyon aynı denklemlerden,
+# belirtilen fiziksel parametrelerle eşdeğer kuvvetleri (N) ve momentleri (N·m) hesaplar:
+#   ileri yön:  m·dv/dt = T_yelken − D_dümen − R_gövde,  R_gövde = m·v/τ  ->  dv/dt = (V* − v)/τ
+#   yelken:     toplam kuvvet bom kirişine dik (düz levha yaklaşımı): T = F_N·sin δs, F_yan = F_N·cos δs
+#   dümen:      Y = ½·ρ_su·A_d·C_L(δr)·v²,  N_dümen = Y·x_d
+#   yelken momenti (orsaya kaçma): N_yelken = −s·F_yan·e  (basınç merkezi yanal direnç merkezinin gerisinde)
+@dataclass(frozen=True)
+class Physics:
+    mass: float = 250.0          # tekne + ekipman kütlesi (kg) – varsayım (≈ 5 m'lik katamaran)
+    sail_area: float = 20.0      # kumaş yelken alanı (m²) – varsayım
+    rudder_area: float = 0.16    # iki dümen palasının toplam alanı (m²) – varsayım
+    rudder_cla: float = 3.49     # dümen kaldırma eğimi (1/rad), en-boy oranı 2.5: 2π·AR/(AR+2)
+    rudder_clmax: float = 1.2    # dümen stall sınırı (C_L,max)
+    rudder_arm: float = 2.1      # dümen palasının ağırlık merkezine uzaklığı (m)
+    ce_offset: float = 0.20      # yelken basınç merkezi – yanal direnç merkezi kaçıklığı (m), tam apazda kalibre
+    rho_air: float = 1.225       # hava yoğunluğu (kg/m³)
+    rho_water: float = 1025.0    # deniz suyu yoğunluğu (kg/m³)
+
+
+PHYS = Physics()
+
+
+def apparent_wind(heading_deg, speed_ms, wind_ms):
+    """Görünür rüzgar hızı (m/s) ve pruvaya göre açısı AWA (°). Kuzey rüzgarı + teknenin kendi hareketi."""
+    c = np.cos(np.radians(heading_deg))
+    va = float(np.sqrt(speed_ms ** 2 + wind_ms ** 2 + 2.0 * speed_ms * wind_ms * c))
+    if va < 1e-9:
+        return 0.0, 0.0
+    return va, float(np.degrees(np.arccos(np.clip((speed_ms + wind_ms * c) / va, -1.0, 1.0))))
+
+
+def force_moment_breakdown(heading_deg, sail_deg, rudder_deg, wind_ms, speed_ms=None, auto_trim=False,
+                           profile=PROFILE, phys=PHYS, tau=TAU_SURGE):
+    """
+    Verilen pruva / yelken / dümen açısında tekneye etkiyen kuvvetler (N) ve momentler (N·m).
+    speed_ms None ise tekne kararlı hızda (v = V*) kabul edilir; o zaman net ileri kuvvet sıfırdır.
+    İşaretler: momentte + sancağa (ψ artar) döndürür; yan kuvvet rüzgar altı bordaya doğrudur.
+    """
+    psi = wrap360(heading_deg)
+    opt, ratio = polar_point(psi, profile)
+    s = leeward_sign(psi)
+    sail = opt if auto_trim else abs(sail_deg)
+    eta = 1.0 if (auto_trim or ratio == 0.0) else trim_efficiency(sail, opt, profile)[0]
+    kappa = rudder_penalty(rudder_deg)
+    v_star = wind_ms * ratio * eta * kappa
+    v = v_star if speed_ms is None else float(speed_ms)
+    k = phys.mass / tau                                   # doğrusal direnç katsayısı (N·s/m)
+
+    # İleri yön kuvvet dengesi
+    drive = k * wind_ms * ratio * eta                     # yelkenin ileri itkisi
+    rudder_drag = drive * (1.0 - kappa)                   # dümen palasının sürüklemesi
+    hull_drag = k * v                                     # gövde direnci
+    net = drive - rudder_drag - hull_drag                 # = m·(V* − v)/τ
+
+    # Yelken kuvveti: kirişe dik toplam kuvvet -> ileri ve yan bileşen
+    sin_s = np.sin(np.radians(max(sail, 5.0)))
+    normal = drive / sin_s if drive > 0 else 0.0
+    side = normal * np.cos(np.radians(sail))
+    va, awa = apparent_wind(psi, v, wind_ms)
+    q_air = 0.5 * phys.rho_air * va ** 2
+    c_n = normal / (q_air * phys.sail_area) if q_air > 0 else 0.0
+
+    # Dümen kuvveti ve momenti
+    r = float(np.clip(rudder_deg, -RUDDER_MAX_DEG, RUDDER_MAX_DEG))
+    q_water = 0.5 * phys.rho_water * phys.rudder_area * v ** 2
+    cl = float(np.clip(phys.rudder_cla * np.radians(r), -phys.rudder_clmax, phys.rudder_clmax))
+    rudder_force = q_water * cl
+    rudder_moment = rudder_force * phys.rudder_arm
+    sail_moment = -s * side * phys.ce_offset              # orsaya kaçma: tekneyi rüzgara döndürür
+    balance = (np.degrees(-sail_moment / (phys.rudder_arm * q_water * phys.rudder_cla))
+               if q_water > 0 else 0.0)                   # yelken momentini dengeleyen dümen açısı
+
+    # Dönüş (kinematik model) ve gereken merkezcil kuvvet
+    yaw = yaw_rate_dps(v, r, psi)
+    w = np.radians(yaw)
+    out = dict(
+        twa=true_wind_angle(psi), leeward=s, sail=sail, opt=opt, eta=eta, kappa=kappa,
+        v_star=v_star, v=v, drive=drive, rudder_drag=rudder_drag, hull_drag=hull_drag, net=net,
+        accel=net / phys.mass, normal=normal, side=side, va=va, awa=awa, c_n=c_n,
+        rudder_cl=cl, rudder_force=rudder_force, rudder_moment=rudder_moment, sail_moment=sail_moment,
+        net_moment=rudder_moment + sail_moment, rudder_balance=float(balance),
+        yaw_rate=yaw, turn_radius=(v / abs(w) if abs(w) > 1e-9 else float("inf")),
+        centripetal=phys.mass * v * abs(w),
+    )
+    return {key: float(val) for key, val in out.items()}
