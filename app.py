@@ -4,6 +4,7 @@ import importlib
 import json
 import os
 
+import altair as alt
 import streamlit as st
 import streamlit.components.v1 as components
 import numpy as np
@@ -144,10 +145,12 @@ def sync_input(label, key_prefix, min_val, max_val, default_val, step=1, help_te
 analyze_points_of_sail_360 = sm.analyze_points_of_sail_360
 
 # --- SİMÜLASYON VE ÇİZİM ÇEKİRDEĞİ ---
-def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, sim_time_s, auto_trim=False, phys=sm.PHYS):
+def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, sim_time_s, auto_trim=False, phys=sm.PHYS,
+                       hold_course=False):
     """
     Bom açısına bağlı ölü açı sektörü, kumaş yelken poları, dümen kinematiği ve merkezi katamaran
     görselleştirmesi (tek yelken modeli: Kumaş Yelken – Cambered / Klasik).
+    hold_course: dümen girdisi yerine orsaya kaçmayı dengeleyen dümen kullanılır (pruva sabit).
     """
     profile = sm.PROFILE
 
@@ -175,7 +178,11 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
             sail_boom_angle, opt_sail, profile, twa)
 
     # 3. DÜMEN VE FRENLEME ETKİSİ:
-    rudder_clamped = float(np.clip(rudder_deg, -sm.RUDDER_MAX_DEG, sm.RUDDER_MAX_DEG))
+    if hold_course:
+        rudder_clamped = sm.holding_rudder_deg(
+            sm.target_speed(heading_deg, sail_boom_angle, 0.0, profile, wind_speed_ms, auto_trim, phys), heading_deg, phys)
+    else:
+        rudder_clamped = float(np.clip(rudder_deg, -sm.RUDDER_MAX_DEG, sm.RUDDER_MAX_DEG))
 
     # Anlık başlangıç hızı (simülasyon döngüsüyle aynı fonksiyon)
     base_speed_ms = sm.target_speed(heading_deg, sail_boom_angle, rudder_clamped, profile, wind_speed_ms, auto_trim, phys)
@@ -184,11 +191,17 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
     # 4. SİMÜLASYON YOLU (surge ataleti + kinematik dönüş + orsaya kaçma):
     dt = sm.DT
     sim = sm.simulate_open_loop(heading_deg, sail_boom_angle, rudder_clamped, profile, wind_speed_ms,
-                                sim_time_s, auto_trim=auto_trim, dt=dt, phys=phys)
+                                sim_time_s, auto_trim=auto_trim, dt=dt, phys=phys, hold_course=hold_course)
     traj_x = list(sim["x"])
     traj_y = list(sim["y"])
     total_distance_m = sim["distance"]
     final_cog_deg = sim["final_heading"]
+    # Simülasyon boyunca pruvanın toplam dönüşü (360° sarmasından bağımsız, − : rüzgara / iskeleye)
+    turn_deg = float(np.sum((np.diff(sim["psi"]) + 180.0) % 360.0 - 180.0))
+    if rudder_clamped == 0.0:
+        turn_reason = "orsaya kaçma, dümen 0°"
+    else:
+        turn_reason = f"dümen {rudder_clamped:+.0f}° + orsaya kaçma"
 
     # --- MATPLOTLIB ÇİZİMİ ---
     fig, ax = plt.subplots(figsize=(7.8, 7.8), dpi=110)
@@ -389,6 +402,25 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
     bow_ref = rot(0, 4.4)
     ax.plot([0, bow_ref[0]], [0, bow_ref[1]], color='#ef4444', linestyle='-', lw=1.5, zorder=5, label='Pruva Hattı')
 
+    # Pruvanın simülasyon boyunca dönüşü: son pruva hattı (kesikli) ve başlangıçtan ona dönüş yayı
+    if abs(turn_deg) >= 0.5:
+        def compass_pt(c_deg, r):
+            return r * np.sin(np.radians(c_deg)), r * np.cos(np.radians(c_deg))
+        h_end = heading_deg + turn_deg              # açılmış (sarmasız) son pruva
+        end_ref = compass_pt(h_end, 4.4)
+        ax.plot([0, end_ref[0]], [0, end_ref[1]], color='#d97706', linestyle='--', lw=1.6, zorder=5)
+        if abs(turn_deg) < 360.0:
+            arc = [compass_pt(c, 4.0) for c in np.linspace(heading_deg, h_end, 40)]
+            ax.plot([p[0] for p in arc[:-1]], [p[1] for p in arc[:-1]], color='#d97706', lw=1.8, zorder=6)
+            ax.annotate('', xy=arc[-1], xytext=arc[-4],
+                        arrowprops=dict(arrowstyle='-|>', color='#d97706', lw=1.8, mutation_scale=16), zorder=6)
+        lab = compass_pt(h_end + np.sign(turn_deg) * 16.0, 5.6)
+        ax.text(lab[0], lab[1], f"Pruva {heading_deg:.0f}° → {final_cog_deg:.1f}°\n"
+                                f"{turn_deg:+.1f}° / {sim_time_s:.0f} sn"
+                                f"{' (orsaya kaçma)' if rudder_clamped == 0.0 else ''}",
+                fontsize=7.8, fontweight='bold', color='#92400e', ha='center', va='center',
+                bbox=dict(boxstyle='round,pad=0.25', facecolor='#fffbeb', edgecolor='#f59e0b', alpha=0.95), zorder=16)
+
     ax.set_xlim(-9, 9)
     ax.set_ylim(-9, 9)
     ax.set_aspect('equal')
@@ -402,12 +434,16 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
     plt.tight_layout()
 
     # Dümen yönü açıklaması
-    if rudder_clamped > 0:
+    if hold_course:
+        rudder_info = f"Rotayı Tutuyor (dümen {sim['rudder'][-1]:+.2f}°)"
+    elif rudder_clamped > 0:
         rudder_info = f"Sağa Dönüş (+{rudder_clamped:.0f}° Sancak)"
     elif rudder_clamped < 0:
         rudder_info = f"Sola Dönüş ({rudder_clamped:.0f}° İskele)"
+    elif abs(turn_deg) >= 0.5:
+        rudder_info = "Dümen Ortada (0°) – Orsaya Kaçıyor"
     else:
-        rudder_info = "Düz Rota (0°)"
+        rudder_info = "Dümen Ortada (0°)"
 
     telemetry = {
         "speed_kts": base_speed_kts,
@@ -424,11 +460,35 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
         "trim_eff": trim_efficiency * 100.0,
         "badge_type": badge_type,
         "final_cog_deg": final_cog_deg,
+        "turn_deg": turn_deg,
+        "turn_reason": turn_reason,
         "rudder_info": rudder_info,
         "rudder_deg": rudder_clamped,
+        "angle_log": free_sail_angle_log(sim, sail_boom_angle, auto_trim, manual_sail, dt),
     }
 
     return fig, telemetry
+
+
+def free_sail_angle_log(sim, sail_boom_angle, auto_trim, manual_sail, dt):
+    """Serbest seyir açı takip kaydı: her adımda pruva, TWA, seyir, bom (+ sancak / − iskele), dümen, hız, konum."""
+    rows = []
+    for k, psi in enumerate(sim["psi"]):
+        twa = sm.true_wind_angle(psi)
+        side = sm.leeward_sign(psi)
+        boom = sm.polar_point(psi)[0] if auto_trim else sail_boom_angle
+        rows.append({
+            "Zaman (s)": round(k * dt, 2),
+            "Pruva (°)": round(float(psi), 1),
+            "TWA (°)": round(twa, 1),
+            "Seyir": "Ölü Açı" if twa <= sm.dead_zone_deg(manual_sail) else sm.BANDS[sm.band_index(twa)][2],
+            "Bom (°)": round(side * boom if side != 0.0 else (0.0 if auto_trim else boom), 1),
+            "Dümen (°)": round(float(sim["rudder"][k]), 2),
+            "Hız (kts)": round(float(sim["v"][k]) * sm.MS_TO_KTS, 1),
+            "Doğu x (m)": round(float(sim["x"][k]), 1),
+            "Kuzey y (m)": round(float(sim["y"][k]), 1),
+        })
+    return pd.DataFrame(rows)
 
 # --- STREAMLIT ARAYÜZÜ ---
 st.markdown("## ⛵ Otonom Yelkenli Katamaran ve Saildrone Simülatörü")
@@ -530,6 +590,8 @@ with tab_free:
             step=1,
             help_text="330°-030°: Ölü Açı (60° No-Go; bom elle 30°'den fazla açılırsa ±bom açısına genişler), 030°-050°: Orsa, 050°-080°: Dar Apaz, 090°: Tam Apaz (En Hızlı), 135°: Geniş Apaz, 180°: Pupa, 270°: Sancak Kontra Tam Apaz."
         )
+        # Simülasyon sonundaki pruva (orsaya kaçma / dümenle dönüş) – simülasyon çalışınca doldurulur
+        heading_drift_box = st.empty()
 
         # 3. Yelken Açısı ve Otomatik Trim
         col_s1, col_s2 = st.columns([2.5, 1.5])
@@ -547,16 +609,24 @@ with tab_free:
             st.markdown("<div style='height:22px;'></div>", unsafe_allow_html=True)
             auto_trim_active = st.checkbox("🤖 Auto-Trim", value=False, help="Otomatik trim: Bom açısını anlık rüzgar açısına göre kumaş yelkenin optimum açısına ayarlar.")
 
-        # 4. Dümen Açısı (Realist ±35°)
-        rudder_angle_val = sync_input(
-            label="🕹️ Dümen Açısı (-35° İskele / +35° Sancak)",
-            key_prefix="rudder",
-            min_val=-35,
-            max_val=35,
-            default_val=0,
-            step=1,
-            help_text="Pozitif (+): Yeke sola basılır, pala sağa açılır, tekne sağa (sancağa) döner. Negatif (-): Pala sola açılır, tekne sola döner."
-        )
+        # 4. Dümen Açısı (Realist ±35°) ve Rotayı Tut
+        col_r1, col_r2 = st.columns([2.5, 1.5])
+        with col_r1:
+            rudder_angle_val = sync_input(
+                label="🕹️ Dümen Açısı (-35° İskele / +35° Sancak)",
+                key_prefix="rudder",
+                min_val=-35,
+                max_val=35,
+                default_val=0,
+                step=1,
+                help_text="Pozitif (+): Yeke sola basılır, pala sağa açılır, tekne sağa (sancağa) döner. Negatif (-): Pala sola açılır, tekne sola döner."
+            )
+        with col_r2:
+            st.markdown("<div style='height:22px;'></div>", unsafe_allow_html=True)
+            hold_course_active = st.checkbox(
+                "🧭 Rotayı Tut", value=False,
+                help="Dümen ortadayken (0°) yelken pruvayı yavaşça rüzgara çevirir (orsaya kaçma). Rotayı Tut, bunu dengeleyen "
+                     "küçük dümen açısını (tam apazda ≈ +0.2°) her adımda uygular ve pruva sabit kalır. Açıkken dümen girdisi kullanılmaz.")
 
         # 5. Rüzgar Hızı
         wind_speed_val = sync_input(
@@ -614,8 +684,22 @@ with tab_free:
             wind_speed_ms=float(wind_speed_val),
             sim_time_s=float(sim_time_val),
             auto_trim=auto_trim_active,
-            phys=phys
+            phys=phys,
+            hold_course=hold_course_active
         )
+
+        if abs(tel["turn_deg"]) >= 0.5:
+            heading_drift_box.markdown(
+                f"<div style='font-size:0.8rem; color:#92400e; background:#fffbeb; border:1px solid #fcd34d; "
+                f"border-radius:6px; padding:4px 8px; margin:-4px 0 6px 0;'>↻ {sim_time_val} sn sonra pruva "
+                f"<b>{boat_heading_val}° → {tel['final_cog_deg']:.1f}°</b> ({tel['turn_deg']:+.1f}°, {tel['turn_reason']})</div>",
+                unsafe_allow_html=True)
+        elif hold_course_active:
+            heading_drift_box.markdown(
+                f"<div style='font-size:0.8rem; color:#166534; background:#f0fdf4; border:1px solid #86efac; "
+                f"border-radius:6px; padding:4px 8px; margin:-4px 0 6px 0;'>🧭 Rota tutuluyor: pruva "
+                f"<b>{boat_heading_val}°</b> sabit (dümen {tel['rudder_deg']:+.2f}° orsaya kaçmayı dengeliyor)</div>",
+                unsafe_allow_html=True)
 
         st.pyplot(fig, width='stretch')
 
@@ -640,11 +724,12 @@ with tab_free:
             """, unsafe_allow_html=True)
 
         with c3:
+            heading_end_txt = f" → {tel['final_cog_deg']:.1f}°" if abs(tel["turn_deg"]) >= 0.5 else ""
             st.markdown(f"""
             <div class="metric-card">
                 <div class="metric-lbl">360° SEYİR TİPİ</div>
                 <div style="font-size:0.92rem; font-weight:700; color:#0f172a; margin-top:3px;">{tel['regime']}</div>
-                <div style="font-size:0.72rem; color:#64748b;">Pruva: {tel['heading_deg']}° | {tel['wind_side']}</div>
+                <div style="font-size:0.72rem; color:#64748b;">Pruva: {tel['heading_deg']}°{heading_end_txt} | {tel['wind_side']}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -660,8 +745,27 @@ with tab_free:
 
         st.markdown(f"**ℹ️ Seyir & Aerodinamik Durumu:** {tel['regime_desc']}")
 
+        with st.expander("📋 Açı Takip Tablosu – pruva, bom ve dümen zamana göre", expanded=True):
+            log = tel["angle_log"]
+            st.markdown("**Pruva (°) – zaman (s)**")
+            # Eksen 0'dan başlamaz: birkaç derecelik orsaya kaçma da görünsün
+            st.altair_chart(
+                alt.Chart(log).mark_line(color="#2a78d6", strokeWidth=2).encode(
+                    x=alt.X(field="Zaman (s)", type="quantitative", title="Zaman (s)"),
+                    y=alt.Y(field="Pruva (°)", type="quantitative", title="Pruva (°)",
+                            scale=alt.Scale(zero=False, padding=8)),
+                    tooltip=[alt.Tooltip(field=c, type="quantitative" if c != "Seyir" else "nominal")
+                             for c in ("Zaman (s)", "Pruva (°)", "TWA (°)", "Seyir", "Bom (°)", "Dümen (°)", "Hız (kts)")],
+                ).properties(height=170),
+                width='stretch')
+            every = 1.0 if sim_time_val <= 15 else 5.0     # tabloda 1 sn ya da 5 sn aralıklı satırlar + son satır
+            rows = np.isclose(log["Zaman (s)"] % every, 0.0) | (log.index == log.index[-1])
+            st.dataframe(log[rows], hide_index=True, width='stretch')
+            st.caption("Bom: + sancakta, − iskelede. Pruva rüzgara döndükçe (orsaya kaçma) TWA küçülür; "
+                       "Rotayı Tut açıkken dümen bunu dengeler ve pruva sabit kalır.")
+
         with st.expander("🧮 Kuvvet ve Moment Hesabı (kararlı hızda, N ve N·m)", expanded=False):
-            fm = sm.force_moment_breakdown(boat_heading_val, sail_angle_val, rudder_angle_val,
+            fm = sm.force_moment_breakdown(boat_heading_val, sail_angle_val, tel["rudder_deg"],
                                            float(wind_speed_val), auto_trim=auto_trim_active, phys=phys)
             if fm["drive"] == 0.0 and fm["twa"] <= sm.NO_GO_DEG:
                 st.warning("Tekne ölü açıda: yelken yapraklıyor, itki ve yelken kuvveti sıfır; hız olmadığı için dümen de moment üretmez.")

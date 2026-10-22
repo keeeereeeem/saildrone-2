@@ -286,6 +286,18 @@ def yaw_rate_dps(speed_ms, rudder_deg, heading_deg, phys=PHYS):
     return rate - leeward_sign(heading_deg) * phys.weather_helm
 
 
+def holding_rudder_deg(speed_ms, heading_deg, phys=PHYS):
+    """
+    Rotayı tutan dümen açısı (°): orsaya kaçmayı tam dengeler, ψ̇ = 0 ->
+    sin δr = s·ω_wh·L / v. Dümen tutmayan hızda (v ≤ MIN_STEER_SPEED) tekne zaten dönmez: 0.
+    """
+    if speed_ms <= MIN_STEER_SPEED:
+        return 0.0
+    lim = np.sin(np.radians(RUDDER_MAX_DEG))
+    x = np.radians(leeward_sign(heading_deg) * phys.weather_helm) * phys.hull_length / speed_ms
+    return float(np.degrees(np.arcsin(np.clip(x, -lim, lim))))
+
+
 @dataclass
 class BoatState:
     x: float = 0.0
@@ -294,37 +306,52 @@ class BoatState:
     v: float = 0.0     # ileri hız (m/s)
 
 
-def step(state, sail_deg, rudder_deg, profile, wind_ms, auto_trim=False, dt=DT, tau=None, phys=PHYS):
-    """Tek entegrasyon adımı (yarı-örtük Euler; surge için tam üstel çözüm). tau None -> phys.tau."""
+def step(state, sail_deg, rudder_deg, profile, wind_ms, auto_trim=False, dt=DT, tau=None, phys=PHYS,
+         hold_course=False):
+    """
+    Tek entegrasyon adımı (yarı-örtük Euler; surge için tam üstel çözüm). tau None -> phys.tau.
+    hold_course: rudder_deg yerine her adımda rotayı tutan dümen (holding_rudder_deg) kullanılır.
+    """
     tau = phys.tau if tau is None else tau
+    if hold_course:
+        rudder_deg = holding_rudder_deg(state.v, state.psi, phys)
     v_star = target_speed(state.psi, sail_deg, rudder_deg, profile, wind_ms, auto_trim, phys)
     if tau > 0.0:
         v = v_star + (state.v - v_star) * np.exp(-dt / tau)
     else:
         v = v_star
+    if hold_course:
+        rudder_deg = holding_rudder_deg(v, state.psi, phys)   # dönüş yeni hızla hesaplanır
     psi = wrap360(state.psi + yaw_rate_dps(v, rudder_deg, state.psi, phys) * dt)
     rad = np.radians(psi)
     return BoatState(state.x + v * np.sin(rad) * dt, state.y + v * np.cos(rad) * dt, psi, v)
 
 
 def simulate_open_loop(heading_deg, sail_deg, rudder_deg, profile, wind_ms, sim_time_s,
-                       auto_trim=False, dt=DT, tau=None, x0=0.0, y0=0.0, phys=PHYS):
+                       auto_trim=False, dt=DT, tau=None, x0=0.0, y0=0.0, phys=PHYS, hold_course=False):
     """
     Sabit yelken/dümen girdisiyle açık çevrim simülasyon.
     Tekne başlangıçta kararlı-durum hızında kabul edilir.
+    hold_course: dümen her adımda orsaya kaçmayı dengeler, pruva sabit kalır (rudder_deg yok sayılır).
+    Dönüşteki 'rudder' dizisi her adımda kullanılan dümen açısıdır.
     """
     s = BoatState(x0, y0, wrap360(float(heading_deg)), 0.0)
+    if hold_course:
+        rudder_deg = holding_rudder_deg(target_speed(s.psi, sail_deg, 0.0, profile, wind_ms, auto_trim, phys),
+                                        s.psi, phys)
     s.v = target_speed(s.psi, sail_deg, rudder_deg, profile, wind_ms, auto_trim, phys)
-    xs, ys, psis, vs = [s.x], [s.y], [s.psi], [s.v]
+    xs, ys, psis, vs, rs = [s.x], [s.y], [s.psi], [s.v], [rudder_deg]
     dist = 0.0
     for _ in range(int(round(sim_time_s / dt))):
-        s = step(s, sail_deg, rudder_deg, profile, wind_ms, auto_trim, dt, tau, phys)
+        prev_psi = s.psi
+        s = step(s, sail_deg, rudder_deg, profile, wind_ms, auto_trim, dt, tau, phys, hold_course)
         xs.append(s.x)
         ys.append(s.y)
         psis.append(s.psi)
         vs.append(s.v)
+        rs.append(holding_rudder_deg(s.v, prev_psi, phys) if hold_course else rudder_deg)
         dist += s.v * dt
-    return dict(x=np.array(xs), y=np.array(ys), psi=np.array(psis), v=np.array(vs),
+    return dict(x=np.array(xs), y=np.array(ys), psi=np.array(psis), v=np.array(vs), rudder=np.array(rs, dtype=float),
                 distance=dist, final_heading=s.psi, v0=vs[0])
 
 

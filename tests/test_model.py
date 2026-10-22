@@ -142,6 +142,38 @@ def test_weather_helm_rounds_up_into_wind(h):
     assert m.true_wind_angle(r["final_heading"]) < m.true_wind_angle(h)
 
 
+def test_holding_rudder_cancels_weather_helm():
+    """Rotayı tut: dümen orsaya kaçmayı tam dengeler; kuvvet modelindeki denge dümeniyle aynı mertebede."""
+    f = m.force_moment_breakdown(90, 46, 0, 8.0)
+    r = m.holding_rudder_deg(f["v"], 90)
+    assert r == pytest.approx(f["rudder_balance"], rel=0.1)
+    assert m.yaw_rate_dps(f["v"], r, 90) == pytest.approx(0.0, abs=1e-12)
+    assert m.holding_rudder_deg(f["v"], 270) == pytest.approx(-r)
+    assert m.holding_rudder_deg(0.1, 90) == 0.0                       # dümen tutmayan hızda dönüş yok
+
+
+@pytest.mark.parametrize("h", [40, 95, 150, 210, 265, 320])
+def test_hold_course_keeps_heading(h):
+    free = m.simulate_open_loop(h, 0, 0, "cloth", 8.0, 30.0, auto_trim=True)
+    held = m.simulate_open_loop(h, 0, 0, "cloth", 8.0, 30.0, auto_trim=True, hold_course=True)
+    assert m.true_wind_angle(free["final_heading"]) < m.true_wind_angle(h)   # dümen 0°: orsaya kaçar
+    assert held["final_heading"] == pytest.approx(h, abs=1e-9)
+    assert np.all(np.sign(held["rudder"]) == m.leeward_sign(h))
+    assert held["distance"] == pytest.approx(held["v0"] * 30.0, rel=1e-3)
+
+
+def test_hold_course_follows_heading_line():
+    """Pruva 095°'de tutulunca tekne doğunun 5° altına, yani hafifçe güneye gider."""
+    held = m.simulate_open_loop(95, 0, 0, "cloth", 8.0, 30.0, auto_trim=True, hold_course=True)
+    assert held["y"][-1] == pytest.approx(held["distance"] * np.cos(np.radians(95)), rel=1e-9)
+    assert held["y"][-1] < -20.0
+
+
+def test_open_loop_reports_rudder_used():
+    r = m.simulate_open_loop(90, 46, 12, "cloth", 8.0, 5.0)
+    assert len(r["rudder"]) == len(r["psi"]) and np.all(r["rudder"] == 12.0)
+
+
 def test_start_in_irons_never_moves():
     r = m.simulate_open_loop(0, 40, 30, "cloth", 10.0, 60.0)
     assert r["distance"] == 0.0 and r["final_heading"] == 0.0

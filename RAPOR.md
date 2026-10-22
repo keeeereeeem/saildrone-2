@@ -125,7 +125,11 @@ $$\dot\psi\ [°/\text{s}] = \underbrace{\frac{v}{L}\,\sin\delta_r\cdot\frac{180}
 
 * Dümen etkisi **hızla orantılıdır**: $v \le 0.2$ m/s iken $\dot\psi = 0$ (dümen dümen tutmaz).
 * Sabit dümende dönüş yarıçapı $R = L/\sin\delta_r$ (tam dümende $R = 8.0$ m).
-* Orsaya kaçma rüzgar altı bordasına bağlıdır: iskele kontrada ($s=+1$) pruva azalır, sancak kontrada ($s=-1$) artar — her iki durumda da tekne rüzgara döner.
+* Orsaya kaçma rüzgar altı bordasına bağlıdır: iskele kontrada ($s=+1$) pruva azalır, sancak kontrada ($s=-1$) artar — her iki durumda da tekne rüzgara döner. Örnek: $\psi_0 = 095°$, auto-trim, $\delta_r = 0°$ → 30 s'de pruva 95° → 84.5° ($-10.5°$). Tekne önce 5.6 m güneye iner, sonra kuzeye kıvrılır.
+* **Rotayı Tut.** Pruvayı sabit tutmak için dümenin orsaya kaçmayı her adımda dengelemesi gerekir ($\dot\psi = 0$):
+  $$\sin\delta_{r,tut} = \frac{s(\psi)\,\omega_{wh}\,L}{v}$$
+  Tam apazda bu açı +0.175°'dir; arayüzdeki 1°'lik dümen adımıyla verilemez. Bu yüzden serbest seyre "Rotayı Tut" seçeneği eklendi. Seçenek açıkken dümen girdisi kullanılmaz; $\psi_0 = 095°$'de tekne 276 m'de 24.1 m güneye, pruva doğrultusunda gider.
+* Arayüz pruvanın simülasyon boyunca değişimini üç yerde gösterir: pruva girdisinin altında ("95° → 84.5°"), çizimde (başlangıç ve son pruva hattı arasındaki dönüş yayı) ve **Açı Takip Tablosu**nda (pruva–zaman grafiği; zaman, pruva, TWA, seyir, bom, dümen, hız, konum).
 * Dümen ve yelken momentlerinin N·m cinsinden hesabı Bölüm 3.1'dedir.
 * $L$ ve $\omega_{wh}$ varsayılan tekneye aittir; $L$ arayüzden doğrudan, $\omega_{wh}$ ise yelken–dümen geometrisinden türetilerek değişir (Bölüm 3.2).
 
