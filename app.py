@@ -702,6 +702,7 @@ with tab_free:
                 unsafe_allow_html=True)
 
         st.pyplot(fig, width='stretch')
+        plt.close(fig)   # her yeniden çalıştırmada açılan figür bellekte birikmesin (bulutta 1 GB sınırı)
 
         c1, c2, c3, c4 = st.columns(4)
 
