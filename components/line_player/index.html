@@ -1,0 +1,575 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Düz Rota (PID) Oynatıcı</title>
+<style>
+  :root {
+    --ink: #0f172a; --muted: #64748b; --line: #e2e8f0; --panel: #f8fafc;
+    --accent: #0284c7; --sail: #2563eb; --rudder: #dc2626; --ok: #16a34a; --route: #0f766e;
+    --pid: #7c3aed; --pid-soft: #ede9fe; --warn: #b45309;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #ffffff; color: var(--ink);
+    font-family: "Source Sans Pro", "Segoe UI", system-ui, sans-serif; font-size: 13px; }
+  #root { padding: 2px 2px 6px 2px; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .bar .sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
+  button, select { font: inherit; border: 1px solid #cbd5e1; background: #fff; color: var(--ink);
+    border-radius: 6px; padding: 4px 9px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.on { background: #e0f2fe; border-color: var(--accent); color: #0369a1; font-weight: 600; }
+  .hint { color: var(--muted); font-size: 11.5px; }
+  .main { display: grid; grid-template-columns: minmax(0, 1fr) 272px; gap: 8px; align-items: start; }
+  @media (max-width: 760px) { .main { grid-template-columns: 1fr; } }
+  #mapWrap { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #f8fafc; }
+  #map { display: block; width: 100%; height: 430px; touch-action: none; }
+  #ov { position: absolute; right: 8px; bottom: 22px; width: 190px; height: 130px; background: rgba(255,255,255,.94);
+    border: 1px solid #cbd5e1; border-radius: 8px; pointer-events: none; }
+  #ovCv { display: block; width: 100%; height: 100%; }
+  #pill { position: absolute; left: 8px; top: 8px; background: rgba(255,255,255,.94); border: 1px solid #cbd5e1;
+    border-radius: 8px; padding: 4px 9px; font-weight: 600; pointer-events: none; font-variant-numeric: tabular-nums; }
+  #pill .e { color: var(--rudder); }
+  #busy { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); background: #fef9c3; color: #a16207;
+    border: 1px solid #fde68a; border-radius: 6px; padding: 3px 10px; font-weight: 600; display: none; }
+  #tip { position: absolute; pointer-events: none; background: rgba(15,23,42,.85); color: #fff; padding: 2px 6px;
+    border-radius: 4px; font-size: 11px; display: none; white-space: nowrap; }
+  .play { display: flex; align-items: center; gap: 8px; margin: 8px 0 6px 0; }
+  .play input[type=range] { flex: 1; accent-color: var(--accent); }
+  #clock { font-variant-numeric: tabular-nums; min-width: 110px; text-align: right; color: var(--muted); }
+  #strip { display: block; width: 100%; height: 132px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .side { display: flex; flex-direction: column; gap: 8px; }
+  .card { border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+  .card h4 { margin: 0; padding: 6px 10px; font-size: 12.5px; border-bottom: 1px solid var(--line); background: var(--panel);
+    border-radius: 8px 8px 0 0; display: flex; justify-content: space-between; align-items: baseline; gap: 6px; }
+  .card h4 .hint { font-weight: 400; }
+  .cb { padding: 6px 10px 8px; }
+  .loop { font-size: 11px; font-weight: 700; color: var(--muted); margin: 4px 0 2px; letter-spacing: .3px; }
+  .pr { display: grid; grid-template-columns: 16px minmax(0, 1fr) 52px; align-items: center; gap: 6px; height: 17px; }
+  .pr .k { font-weight: 700; color: var(--pid); font-size: 11.5px; }
+  .pr .v { text-align: right; font-variant-numeric: tabular-nums; font-size: 11.5px; }
+  .pr.sum .k { color: var(--ink); } .pr.sum .v { font-weight: 700; }
+  .track { position: relative; height: 9px; background: #f1f5f9; border-radius: 3px; }
+  .track .mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: #94a3b8; }
+  .track .fill { position: absolute; top: 0; bottom: 0; background: var(--pid); border-radius: 3px; }
+  .pr.sum .track .fill { background: #4c1d95; }
+  .pr.ff .k { color: #0f766e; font-size: 10.5px; } .pr.ff .track .fill { background: #14b8a6; }
+  .pr.rud .track .fill { background: var(--rudder); }
+  #depw { margin-top: 5px; font-size: 11px; color: var(--warn); font-weight: 600; min-height: 14px; }
+  .gg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; }
+  .gi .l { font-size: 10.5px; color: var(--muted); font-weight: 700; letter-spacing: .3px; }
+  .gi .v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+  .gi .v.sail { color: var(--sail); } .gi .v.rud { color: var(--rudder); } .gi .v.err { color: var(--route); }
+  #fbd { display: block; width: 100%; height: 240px; }
+  .fl { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 2px 6px; align-items: center;
+    font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .fl .sw { width: 10px; height: 3px; border-radius: 2px; }
+  .fl .n { text-align: right; font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="root">
+  <div class="bar">
+    <button id="mFollow" class="on" title="Harita tekneyi yakından takip eder; çizgiden sapma metre ölçeğinde görünür">🎯 Tekneyi takip et</button>
+    <button id="mAll" title="Tüm rotayı göster; A ve B noktalarını sürükleyerek taşıyabilirsin">🗺️ Tüm rota (A / B taşı)</button>
+    <span class="sep"></span>
+    <button id="zIn" title="Yakınlaştır">＋</button>
+    <button id="zOut" title="Uzaklaştır">－</button>
+    <span class="hint" id="modeHint"></span>
+  </div>
+  <div class="main">
+    <div>
+      <div id="mapWrap">
+        <canvas id="map"></canvas>
+        <div id="pill"></div>
+        <div id="ov"><canvas id="ovCv"></canvas></div>
+        <div id="busy">Yeni rota hesaplanıyor…</div>
+        <div id="tip"></div>
+      </div>
+      <div class="play">
+        <button id="playBtn" title="Oynat / duraklat">▶ Oynat</button>
+        <button id="restartBtn" title="Baştan oynat">⟲ Baştan</button>
+        <select id="speedSel" title="Oynatma hızı (simülasyon saniyesi / gerçek saniye)"></select>
+        <input id="scrub" type="range" min="0" max="1000" value="0" step="1" title="Zamanda git">
+        <span id="clock">0.0 / 0.0 s</span>
+      </div>
+      <canvas id="strip"></canvas>
+    </div>
+    <div class="side">
+      <div class="card">
+        <h4><span>🎛️ Kaskad PID</span><span class="hint">anlık katkılar</span></h4>
+        <div class="cb">
+          <div class="loop">DIŞ DÖNGÜ · sapma e → pruva düzeltmesi Δψ</div>
+          <div class="pr"><span class="k">P</span><div class="track"><div class="mid"></div><div class="fill" id="bPx"></div></div><span class="v" id="vPx">–</span></div>
+          <div class="pr"><span class="k">I</span><div class="track"><div class="mid"></div><div class="fill" id="bIx"></div></div><span class="v" id="vIx">–</span></div>
+          <div class="pr"><span class="k">D</span><div class="track"><div class="mid"></div><div class="fill" id="bDx"></div></div><span class="v" id="vDx">–</span></div>
+          <div class="pr ff" title="İleri besleme: yan kayma kadar rüzgara pay (−s·λ)"><span class="k">İB</span><div class="track"><div class="mid"></div><div class="fill" id="bFx"></div></div><span class="v" id="vFx">–</span></div>
+          <div class="pr sum"><span class="k">ψ*</span><div class="track"><div class="mid"></div><div class="fill" id="bSx"></div></div><span class="v" id="vSx">–</span></div>
+          <div class="loop" style="margin-top:8px">İÇ DÖNGÜ · pruva hatası ε → dümen δr</div>
+          <div class="pr"><span class="k">P</span><div class="track"><div class="mid"></div><div class="fill" id="bPh"></div></div><span class="v" id="vPh">–</span></div>
+          <div class="pr"><span class="k">I</span><div class="track"><div class="mid"></div><div class="fill" id="bIh"></div></div><span class="v" id="vIh">–</span></div>
+          <div class="pr"><span class="k">D</span><div class="track"><div class="mid"></div><div class="fill" id="bDh"></div></div><span class="v" id="vDh">–</span></div>
+          <div class="pr ff" title="İleri besleme: orsaya kaçmayı dengeleyen dümen"><span class="k">İB</span><div class="track"><div class="mid"></div><div class="fill" id="bFh"></div></div><span class="v" id="vFh">–</span></div>
+          <div class="pr sum rud"><span class="k">δr</span><div class="track"><div class="mid"></div><div class="fill" id="bSh"></div></div><span class="v" id="vSh">–</span></div>
+          <div id="depw"></div>
+        </div>
+      </div>
+      <div class="card">
+        <h4><span>🧭 Göstergeler</span><span class="hint" id="tackHint"></span></h4>
+        <div class="cb gg">
+          <div class="gi"><div class="l">PRUVA ψ</div><div class="v" id="gPsi">–</div></div>
+          <div class="gi"><div class="l">HEDEF PRUVA ψ*</div><div class="v" id="gPsid">–</div></div>
+          <div class="gi"><div class="l">SAPMA e</div><div class="v err" id="gE">–</div></div>
+          <div class="gi"><div class="l">HIZ</div><div class="v" id="gV">–</div></div>
+          <div class="gi"><div class="l">BOM δs</div><div class="v sail" id="gS">–</div></div>
+          <div class="gi"><div class="l">DÜMEN δr</div><div class="v rud" id="gR">–</div></div>
+          <div class="gi"><div class="l">YAN KAYMA</div><div class="v" id="gL">–</div></div>
+          <div class="gi"><div class="l">GİDİŞ (COG)</div><div class="v" id="gC">–</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <h4><span>⚖️ Kuvvetler</span><span class="hint">tekne ekseninde, pruva yukarı</span></h4>
+        <canvas id="fbd"></canvas>
+        <div class="cb fl" id="flist"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+// ---------------- Streamlit bileşen protokolü (bağımlılıksız) ----------------
+function post(type, data) { window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data || {}), "*"); }
+function setValue(v) { post("streamlit:setComponentValue", { value: v, dataType: "json" }); }
+let lastHeight = 0;
+function syncHeight() {
+  const h = Math.ceil(document.getElementById("root").getBoundingClientRect().height) + 4;
+  if (Math.abs(h - lastHeight) > 1) { lastHeight = h; post("streamlit:setFrameHeight", { height: h }); }
+}
+window.addEventListener("message", function (ev) {
+  if (ev.data && ev.data.type === "streamlit:render") onRender(ev.data.args || {});
+});
+post("streamlit:componentReady", { apiVersion: 1 });
+
+// ---------------- Durum ----------------
+const $ = (id) => document.getElementById(id);
+const map = $("map"), mctx = map.getContext("2d");
+const ovCv = $("ovCv"), octx = ovCv.getContext("2d");
+const strip = $("strip"), sctx = strip.getContext("2d");
+const fbd = $("fbd"), fctx = fbd.getContext("2d");
+const S = {
+  runId: null, a: null, b: null, wind: 8, data: null, T: 0, cfg: {},
+  follow: true, zoomFollow: 1, view: { cx: 0, cy: 0, s: 1 }, userView: false,
+  playing: false, simT: 0, speed: 2, lastFrame: 0, drag: null, pending: false, hover: null,
+};
+const SPEEDS = [0.5, 1, 2, 5, 10, 20];
+SPEEDS.forEach((v) => { const o = document.createElement("option"); o.value = v; o.textContent = "×" + v; $("speedSel").appendChild(o); });
+
+// ---------------- Yardımcılar ----------------
+const D2R = Math.PI / 180;
+const wrap360 = (a) => ((a % 360) + 360) % 360;
+const wrap180 = (a) => { a = wrap360(a + 180) - 180; return a === -180 ? 180 : a; };
+const twaOf = (h) => { h = wrap360(h); return h <= 180 ? h : 360 - h; };
+const fmtS = (v, d) => (v > 0.0049 ? "+" : v < -0.0049 ? "−" : "") + Math.abs(v).toFixed(d === undefined ? 1 : d);
+const sideTxt = (v) => (v > 0.05 ? "sancak" : v < -0.05 ? "iskele" : "orta");
+function fitBox(xs, ys, w, h, padFrac, minSpan) {
+  let x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs), y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+  const span = Math.max(x1 - x0, y1 - y0, minSpan), pad = span * padFrac;
+  x0 -= pad; x1 += pad; y0 -= pad; y1 += pad;
+  const s = Math.min(w / (x1 - x0), h / (y1 - y0));
+  return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, s: s };
+}
+
+// ---------------- Örnek enterpolasyonu ----------------
+function idxAt(t) {
+  const T = S.data.t; let lo = 0, hi = T.length - 1;
+  if (t <= T[0]) return 0; if (t >= T[hi]) return Math.max(0, hi - 1);
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (T[mid] <= t) lo = mid; else hi = mid; }
+  return lo;
+}
+const LIN = ["x", "y", "v", "e", "delta", "delta_cmd", "depower", "v_lat", "leeway_angle", "p_xte", "i_xte", "d_xte",
+  "p_hdg", "i_hdg", "d_hdg", "ff_hdg", "crab", "drive", "side", "hull_drag", "rudder_force", "rudder_moment", "sail_moment", "twa", "r"];
+const ANG = ["psi", "psi_des", "cog"];
+function sampleAt(t) {
+  const d = S.data, n = d.t.length, i = idxAt(t), j = Math.min(i + 1, n - 1);
+  const dt = d.t[j] - d.t[i], f = dt > 0 ? Math.max(0, Math.min(1, (t - d.t[i]) / dt)) : 0;
+  const o = { i: i, t: t };
+  LIN.forEach((k) => { o[k] = d[k][i] + (d[k][j] - d[k][i]) * f; });
+  ANG.forEach((k) => { o[k] = wrap360(d[k][i] + wrap180(d[k][j] - d[k][i]) * f); });
+  o.sail = Math.sign(d.sail[i]) === Math.sign(d.sail[j]) ? d.sail[i] + (d.sail[j] - d.sail[i]) * f : d.sail[f < 0.5 ? i : j];
+  return o;
+}
+
+// ---------------- Katamaran çizimi (yerel birimler: gövde boyu ≈ 4.3) ----------------
+function drawCatamaran(ctx, cx, cy, k, psi, sail, rud) {
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(psi * D2R);
+  const P = (lx, ly) => [lx * k, -ly * k];
+  const hb = 1.35;
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.fillStyle = "rgba(203,213,225,.55)";
+  ctx.beginPath(); [[-hb + .25, 1.25], [hb - .25, 1.25], [hb - .25, -1.35], [-hb + .25, -1.35]].forEach((p, n) => { const q = P(p[0], p[1]); n ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); });
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = "#475569"; ctx.lineWidth = Math.max(1.5, k * 0.28);
+  [1.3, -1.4].forEach((by) => { const a = P(-hb, by), b = P(hb, by); ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke(); });
+  ctx.fillStyle = "#1e293b"; ctx.strokeStyle = "#0f172a"; ctx.lineWidth = Math.max(0.8, k * 0.08);
+  [-hb, hb].forEach((c) => {
+    ctx.beginPath();
+    [[c, 2.2], [c + .22, 1.3], [c + .22, -1.5], [c + .12, -2.1], [c - .12, -2.1], [c - .22, -1.5], [c - .22, 1.3]].forEach((p, n) => { const q = P(p[0], p[1]); n ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); });
+    ctx.closePath(); ctx.fill(); ctx.stroke();
+  });
+  ctx.strokeStyle = "#dc2626"; ctx.lineWidth = Math.max(2, k * 0.3);
+  [-hb, hb].forEach((c) => {
+    const h = P(c, -2.1), tp = P(c + 0.95 * Math.sin(rud * D2R), -2.1 - 0.95 * Math.cos(rud * D2R));
+    ctx.beginPath(); ctx.moveTo(h[0], h[1]); ctx.lineTo(tp[0], tp[1]); ctx.stroke();
+  });
+  const m0 = P(0, 0.2), bl = 2.85, sr = sail * D2R;
+  const tip = [bl * Math.sin(sr), 0.2 - bl * Math.cos(sr)];
+  if (Math.abs(sail) < 0.5) {
+    ctx.strokeStyle = "#ef4444"; ctx.setLineDash([k * 0.25, k * 0.2]); ctx.lineWidth = Math.max(1.5, k * 0.2);
+    ctx.beginPath();
+    for (let n = 0; n <= 20; n++) { const w = n / 20; const q = P(0.15 * Math.sin(4 * Math.PI * w), 0.2 - w * bl); n ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); }
+    ctx.stroke(); ctx.setLineDash([]);
+  } else {
+    const lee = Math.sign(sail), camber = 0.45;
+    const bdx = tip[0], bdy = tip[1] - 0.2, blen = Math.hypot(bdx, bdy);
+    const nx = -bdy / blen * lee, ny = bdx / blen * lee;
+    const curve = [];
+    for (let n = 0; n <= 24; n++) { const w = n / 24, c = camber * Math.sin(Math.PI * w); curve.push(P(w * bdx + c * nx, 0.2 + w * bdy + c * ny)); }
+    ctx.fillStyle = "rgba(37,99,235,.22)"; ctx.beginPath(); ctx.moveTo(m0[0], m0[1]); curve.forEach((q) => ctx.lineTo(q[0], q[1])); ctx.closePath(); ctx.fill();
+    const tw = P(tip[0], tip[1]);
+    ctx.strokeStyle = "#475569"; ctx.lineWidth = Math.max(1, k * 0.16); ctx.beginPath(); ctx.moveTo(m0[0], m0[1]); ctx.lineTo(tw[0], tw[1]); ctx.stroke();
+    ctx.strokeStyle = "#2563eb"; ctx.lineWidth = Math.max(2, k * 0.3); ctx.beginPath(); curve.forEach((q, n) => n ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.stroke();
+  }
+  ctx.fillStyle = "#f59e0b"; ctx.strokeStyle = "#b45309"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(m0[0], m0[1], Math.max(2.2, k * 0.28), 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+  ctx.restore();
+}
+function arrow(ctx, x0, y0, x1, y1, color, width, dash) {
+  const L = Math.hypot(x1 - x0, y1 - y0); if (L < 2) return;
+  const ux = (x1 - x0) / L, uy = (y1 - y0) / L, hl = Math.min(9, L * 0.45);
+  ctx.save(); ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width || 2; ctx.lineCap = "round";
+  if (dash) ctx.setLineDash(dash);
+  ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1 - ux * hl * 0.6, y1 - uy * hl * 0.6); ctx.stroke(); ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - ux * hl - uy * hl * 0.5, y1 - uy * hl + ux * hl * 0.5);
+  ctx.lineTo(x1 - ux * hl + uy * hl * 0.5, y1 - uy * hl - ux * hl * 0.5); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ---------------- Görünüm (dünya ↔ ekran) ----------------
+function W() { return map.clientWidth; } function H() { return map.clientHeight; }
+function toScr(x, y) { return [W() / 2 + (x - S.view.cx) * S.view.s, H() / 2 - (y - S.view.cy) * S.view.s]; }
+function toWorld(px, py) { return [S.view.cx + (px - W() / 2) / S.view.s, S.view.cy - (py - H() / 2) / S.view.s]; }
+function fitAll() {
+  if (W() < 10 || !S.a) return;
+  let xs = [S.a[0], S.b[0]], ys = [S.a[1], S.b[1]];
+  if (S.data) { xs = xs.concat(S.data.x); ys = ys.concat(S.data.y); }
+  const f = fitBox(xs, ys, W(), H(), 0.12, 60); S.view.cx = f.cx; S.view.cy = f.cy; S.view.s = f.s;
+}
+function niceStep(pxPerM, target) {
+  const tgt = (target || 90) / pxPerM; const p = Math.pow(10, Math.floor(Math.log10(tgt)));
+  for (const m of [1, 2, 5, 10]) if (m * p >= tgt) return m * p; return 10 * p;
+}
+
+// ---------------- Harita ----------------
+function lineGeom() {
+  const dx = S.b[0] - S.a[0], dy = S.b[1] - S.a[1], L = Math.hypot(dx, dy) || 1;
+  return { L: L, u: [dx / L, dy / L], n: [dy / L, -dx / L] };
+}
+function drawMap(cur) {
+  const dpr = window.devicePixelRatio || 1, w = W(), h = H();
+  if (w < 10 || h < 10) return;
+  if (map.width !== Math.round(w * dpr) || map.height !== Math.round(h * dpr)) { map.width = Math.round(w * dpr); map.height = Math.round(h * dpr); }
+  const c = mctx; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  c.fillStyle = "#f8fafc"; c.fillRect(0, 0, w, h);
+  if (!S.a) return;
+  if (S.follow && cur) { S.view.s = Math.min(w, h * 1.4) / 120 * S.zoomFollow; S.view.cx = cur.x; S.view.cy = cur.y; }
+  // ızgara
+  const st = niceStep(S.view.s), tl = toWorld(0, 0), br = toWorld(w, h);
+  c.strokeStyle = "#e9eef5"; c.lineWidth = 1; c.fillStyle = "#94a3b8"; c.font = "10px sans-serif"; c.textAlign = "left";
+  for (let x = Math.ceil(tl[0] / st) * st; x <= br[0]; x += st) { const p = toScr(x, 0)[0]; c.beginPath(); c.moveTo(p, 0); c.lineTo(p, h); c.stroke(); c.fillText(Math.round(x) + " m", p + 3, h - 4); }
+  for (let y = Math.ceil(br[1] / st) * st; y <= tl[1]; y += st) { const p = toScr(0, y)[1]; c.beginPath(); c.moveTo(0, p); c.lineTo(w, p); c.stroke(); c.fillText(Math.round(y) + " m", 3, p - 3); }
+  // rüzgar
+  c.save(); c.strokeStyle = "#0284c7"; c.fillStyle = "#0369a1"; c.lineWidth = 2;
+  for (let n = 0; n < 3; n++) { const x = w - 70 + n * 18; c.beginPath(); c.moveTo(x, 12); c.lineTo(x, 40); c.stroke(); c.beginPath(); c.moveTo(x - 5, 33); c.lineTo(x, 42); c.lineTo(x + 5, 33); c.stroke(); }
+  c.font = "bold 11px sans-serif"; c.textAlign = "center"; c.fillText("Rüzgar " + S.wind.toFixed(0) + " m/s", w - 52, 56); c.restore();
+  // A→B çizgisi ve oturma bandı
+  const g = lineGeom(), band = S.cfg.settle_band || 2;
+  const A = toScr(S.a[0], S.a[1]), B = toScr(S.b[0], S.b[1]);
+  c.save(); c.strokeStyle = "rgba(20,184,166,.16)"; c.lineCap = "butt"; c.lineWidth = Math.max(2, 2 * band * S.view.s);
+  c.beginPath(); c.moveTo(A[0], A[1]); c.lineTo(B[0], B[1]); c.stroke(); c.restore();
+  c.setLineDash([8, 6]); c.strokeStyle = "#0f766e"; c.lineWidth = 1.6; c.beginPath(); c.moveTo(A[0], A[1]); c.lineTo(B[0], B[1]); c.stroke(); c.setLineDash([]);
+  // B hizası (bitiş)
+  const bn1 = toScr(S.b[0] + g.n[0] * 40, S.b[1] + g.n[1] * 40), bn2 = toScr(S.b[0] - g.n[0] * 40, S.b[1] - g.n[1] * 40);
+  c.strokeStyle = "rgba(22,163,74,.55)"; c.lineWidth = 1.2; c.beginPath(); c.moveTo(bn1[0], bn1[1]); c.lineTo(bn2[0], bn2[1]); c.stroke();
+  // yol: tamamı soluk, geçilen kısım sapmaya göre renkli
+  const d = S.data;
+  if (d && d.t.length) {
+    c.globalAlpha = S.pending ? 0.25 : 1;
+    c.strokeStyle = "#cbd5e1"; c.lineWidth = 2; c.beginPath();
+    for (let n = 0; n < d.x.length; n++) { const q = toScr(d.x[n], d.y[n]); n ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]); } c.stroke();
+    if (cur) {
+      c.lineWidth = 3; let prev = toScr(d.x[0], d.y[0]);
+      for (let n = 1; n <= cur.i + 1 && n < d.x.length; n++) {
+        const q = n === cur.i + 1 ? toScr(cur.x, cur.y) : toScr(d.x[n], d.y[n]);
+        const ae = Math.abs(d.e[n]);
+        c.strokeStyle = ae <= band ? "#16a34a" : ae <= 4 * band ? "#d97706" : "#dc2626";
+        c.beginPath(); c.moveTo(prev[0], prev[1]); c.lineTo(q[0], q[1]); c.stroke(); prev = q;
+      }
+    }
+    c.globalAlpha = 1;
+  }
+  // A ve B
+  const mk = (q, label, fill, hot) => {
+    c.fillStyle = fill; c.strokeStyle = "#fff"; c.lineWidth = hot ? 3 : 2;
+    c.beginPath(); c.arc(q[0], q[1], 10, 0, 2 * Math.PI); c.fill(); c.stroke();
+    c.fillStyle = "#fff"; c.font = "bold 11px sans-serif"; c.textAlign = "center"; c.fillText(label, q[0], q[1] + 4);
+  };
+  mk(A, "A", "#0f172a", S.hover === "a"); mk(B, "B", "#16a34a", S.hover === "b");
+  // tekne, sapma oku, hedef pruva, gidiş yönü
+  if (cur && !S.pending) {
+    const q = toScr(cur.x, cur.y), k = Math.max(4, S.view.s);
+    const foot = [cur.x - g.n[0] * cur.e, cur.y - g.n[1] * cur.e], fq = toScr(foot[0], foot[1]);
+    if (Math.abs(cur.e) * S.view.s > 6) {
+      c.setLineDash([3, 3]); c.strokeStyle = "#dc2626"; c.lineWidth = 1.4; c.beginPath(); c.moveTo(fq[0], fq[1]); c.lineTo(q[0], q[1]); c.stroke(); c.setLineDash([]);
+      c.fillStyle = "#b91c1c"; c.font = "bold 11px sans-serif"; c.textAlign = "left";
+      c.fillText("e = " + fmtS(cur.e) + " m", (q[0] + fq[0]) / 2 + 6, (q[1] + fq[1]) / 2);
+    }
+    const R = Math.max(40, 9 * k);
+    c.setLineDash([5, 4]); c.strokeStyle = "#7c3aed"; c.lineWidth = 1.4; c.beginPath(); c.moveTo(q[0], q[1]);
+    c.lineTo(q[0] + R * Math.sin(cur.psi_des * D2R), q[1] - R * Math.cos(cur.psi_des * D2R)); c.stroke(); c.setLineDash([]);
+    c.fillStyle = "#6d28d9"; c.font = "bold 10px sans-serif"; c.textAlign = "center";
+    c.fillText("ψ*", q[0] + (R + 9) * Math.sin(cur.psi_des * D2R), q[1] - (R + 9) * Math.cos(cur.psi_des * D2R) + 3);
+    if (cur.v > 0.3) arrow(c, q[0], q[1], q[0] + R * 0.8 * Math.sin(cur.cog * D2R), q[1] - R * 0.8 * Math.cos(cur.cog * D2R), "rgba(15,118,110,.85)", 1.6);
+    drawCatamaran(c, q[0], q[1], k, cur.psi, cur.sail, cur.delta);
+  }
+}
+function drawOverview(cur) {
+  const dpr = window.devicePixelRatio || 1, w = ovCv.clientWidth, h = ovCv.clientHeight;
+  if (w < 20 || h < 20 || !S.a) return;
+  if (ovCv.width !== Math.round(w * dpr) || ovCv.height !== Math.round(h * dpr)) { ovCv.width = Math.round(w * dpr); ovCv.height = Math.round(h * dpr); }
+  const c = octx; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  let xs = [S.a[0], S.b[0]], ys = [S.a[1], S.b[1]];
+  if (S.data) { xs = xs.concat(S.data.x); ys = ys.concat(S.data.y); }
+  const f = fitBox(xs, ys, w - 10, h - 22, 0.1, 40);
+  const P = (x, y) => [w / 2 + (x - f.cx) * f.s, (h + 12) / 2 - (y - f.cy) * f.s];
+  c.fillStyle = "#334155"; c.font = "bold 10px sans-serif"; c.textAlign = "left"; c.fillText("Tüm rota", 6, 12);
+  const A = P(S.a[0], S.a[1]), B = P(S.b[0], S.b[1]);
+  c.setLineDash([4, 3]); c.strokeStyle = "#0f766e"; c.lineWidth = 1; c.beginPath(); c.moveTo(A[0], A[1]); c.lineTo(B[0], B[1]); c.stroke(); c.setLineDash([]);
+  if (S.data && cur) {
+    c.strokeStyle = "#2563eb"; c.lineWidth = 1.6; c.beginPath();
+    for (let n = 0; n <= cur.i && n < S.data.x.length; n++) { const q = P(S.data.x[n], S.data.y[n]); n ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]); }
+    c.stroke();
+    const q = P(cur.x, cur.y); c.fillStyle = "#dc2626"; c.beginPath(); c.arc(q[0], q[1], 3.5, 0, 2 * Math.PI); c.fill();
+  }
+  [[A, "A", "#0f172a"], [B, "B", "#16a34a"]].forEach(([q, l, col]) => { c.fillStyle = col; c.beginPath(); c.arc(q[0], q[1], 4, 0, 2 * Math.PI); c.fill(); c.fillText(l, q[0] + 5, q[1] - 4); });
+}
+
+// ---------------- Zaman şeridi: sapma ve dümen (ayrı ölçekler, ortak zaman ekseni) ----------------
+function drawStrip(cur) {
+  const dpr = window.devicePixelRatio || 1, w = strip.clientWidth, h = strip.clientHeight;
+  if (w < 20 || !S.data) return;
+  if (strip.width !== Math.round(w * dpr) || strip.height !== Math.round(h * dpr)) { strip.width = Math.round(w * dpr); strip.height = Math.round(h * dpr); }
+  const c = sctx; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  const d = S.data, x0 = 40, x1 = w - 8, T = Math.max(S.T, 1e-6);
+  const X = (t) => x0 + (x1 - x0) * t / T;
+  const rows = [
+    { key: "e", label: "Sapma e (m)", col: "#0f766e", y0: 6, y1: h / 2 - 4, lim: Math.max(2, Math.max.apply(null, d.e.map(Math.abs))) },
+    { key: "delta", label: "Dümen δr (°)", col: "#dc2626", y0: h / 2 + 4, y1: h - 14, lim: Math.max(2, Math.max.apply(null, d.delta.map(Math.abs))) },
+  ];
+  rows.forEach((r) => {
+    const Y = (v) => (r.y0 + r.y1) / 2 - v / r.lim * (r.y1 - r.y0) / 2;
+    c.strokeStyle = "#e2e8f0"; c.lineWidth = 1; c.beginPath(); c.moveTo(x0, Y(0)); c.lineTo(x1, Y(0)); c.stroke();
+    if (r.key === "e") { c.fillStyle = "rgba(20,184,166,.12)"; const bb = S.cfg.settle_band || 2; c.fillRect(x0, Y(bb), x1 - x0, Y(-bb) - Y(bb)); }
+    c.strokeStyle = "#cbd5e1"; c.lineWidth = 1.2; c.beginPath();
+    d.t.forEach((t, n) => { const q = [X(t), Y(d[r.key][n])]; n ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]); }); c.stroke();
+    if (cur) {
+      c.strokeStyle = r.col; c.lineWidth = 1.8; c.beginPath();
+      for (let n = 0; n <= cur.i && n < d.t.length; n++) { const q = [X(d.t[n]), Y(d[r.key][n])]; n ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]); }
+      c.stroke();
+    }
+    c.fillStyle = "#475569"; c.font = "bold 10.5px sans-serif"; c.textAlign = "right"; c.fillText(r.label, x1 - 4, r.y0 + 9);
+    c.font = "10px sans-serif"; c.fillStyle = "#94a3b8";
+    c.fillText("+" + r.lim.toFixed(r.lim < 10 ? 1 : 0), x0 - 4, r.y0 + 8); c.fillText("0", x0 - 4, Y(0) + 3); c.fillText("−" + r.lim.toFixed(r.lim < 10 ? 1 : 0), x0 - 4, r.y1);
+  });
+  c.fillStyle = "#94a3b8"; c.font = "10px sans-serif"; c.textAlign = "center";
+  const ts = niceStep((x1 - x0) / T, 70);
+  for (let t = 0; t <= T + 1e-6; t += ts) c.fillText(Math.round(t) + " s", X(t), h - 2);
+  if (cur) { c.strokeStyle = "#0f172a"; c.lineWidth = 1; c.beginPath(); c.moveTo(X(cur.t), 2); c.lineTo(X(cur.t), h - 12); c.stroke(); }
+}
+
+// ---------------- Sağ panel ----------------
+function setBar(id, v, lim) {
+  const el = $(id), f = Math.max(-1, Math.min(1, v / lim)) * 50;
+  el.style.left = (f >= 0 ? 50 : 50 + f) + "%"; el.style.width = Math.abs(f) + "%";
+}
+function updatePanel(cur) {
+  const cfg = S.cfg, li = cfg.max_intercept || 40, rl = 35;
+  if (!cur) return;
+  const dpsi = wrap180(cur.psi_des - S.bearing);
+  [["Px", -cur.p_xte], ["Ix", -cur.i_xte], ["Dx", -cur.d_xte], ["Fx", cur.crab], ["Sx", dpsi]].forEach(([k, v]) => { setBar("b" + k, v, li); });
+  $("vPx").textContent = fmtS(-cur.p_xte) + "°"; $("vIx").textContent = fmtS(-cur.i_xte) + "°"; $("vDx").textContent = fmtS(-cur.d_xte) + "°";
+  $("vFx").textContent = fmtS(cur.crab) + "°"; $("vSx").textContent = cur.psi_des.toFixed(0) + "°";
+  [["Ph", cur.p_hdg], ["Ih", cur.i_hdg], ["Dh", cur.d_hdg], ["Fh", cur.ff_hdg], ["Sh", cur.delta]].forEach(([k, v]) => { setBar("b" + k, v, rl); });
+  $("vPh").textContent = fmtS(cur.p_hdg) + "°"; $("vIh").textContent = fmtS(cur.i_hdg) + "°"; $("vDh").textContent = fmtS(cur.d_hdg) + "°";
+  $("vFh").textContent = fmtS(cur.ff_hdg) + "°";
+  $("vSh").textContent = fmtS(cur.delta) + "°";
+  const sat = Math.abs(cur.delta_cmd) >= 34.9;
+  $("depw").textContent = cur.depower > 0.01 ? "⛵ Yelken boşaltılıyor: %" + Math.round(cur.depower * 100) + " (dümen doydu)" :
+    sat ? "⚠ Dümen komutu sınırda (±35°)" : "";
+  $("gPsi").textContent = cur.psi.toFixed(1) + "°"; $("gPsid").textContent = cur.psi_des.toFixed(1) + "°";
+  $("gE").textContent = fmtS(cur.e) + " m"; $("gV").textContent = (cur.v * 1.94384).toFixed(1) + " kn";
+  $("gS").textContent = fmtS(cur.sail, 0) + "°"; $("gR").textContent = fmtS(cur.delta) + "°";
+  $("gL").textContent = cur.v > 0.3 ? cur.leeway_angle.toFixed(1) + "°" : "–"; $("gC").textContent = cur.v > 0.3 ? cur.cog.toFixed(1) + "°" : "–";
+  const twa = twaOf(cur.psi);
+  $("tackHint").textContent = "TWA " + twa.toFixed(0) + "° · " + (twa <= 30 ? "ölü açı" : wrap360(cur.psi) <= 180 ? "iskele kontra" : "sancak kontra");
+  const pill = $("pill");
+  pill.innerHTML = "Rota " + S.bearing.toFixed(0) + "° · " + S.L.toFixed(0) + " m · kalan " + Math.max(0, S.L - (cur.along || 0)).toFixed(0) +
+    " m · <span class='e'>e = " + fmtS(cur.e) + " m</span>";
+}
+function drawForces(cur) {
+  const dpr = window.devicePixelRatio || 1, w = fbd.clientWidth, h = fbd.clientHeight;
+  if (w < 40) return;
+  if (fbd.width !== Math.round(w * dpr) || fbd.height !== Math.round(h * dpr)) { fbd.width = Math.round(w * dpr); fbd.height = Math.round(h * dpr); }
+  const c = fctx; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
+  if (!cur) return;
+  const cx = w / 2, cy = Math.round(h * 0.43), k = 21;
+  // gerçek rüzgar (tekne ekseninde): kuzeyden gelir, pruva yukarı çizildiğinden −ψ döndürülür
+  const wa = (180 - cur.psi) * D2R;
+  arrow(c, 20 - 12 * Math.sin(wa), 22 + 12 * Math.cos(wa), 20 + 12 * Math.sin(wa), 22 - 12 * Math.cos(wa), "#0284c7", 2);
+  c.fillStyle = "#0369a1"; c.font = "10px sans-serif"; c.textAlign = "left"; c.fillText("rüzgar", 36, 26);
+  drawCatamaran(c, cx, cy, k, 0, cur.sail, cur.delta);
+  const s = Math.sign(cur.sail) || 0;
+  // tüm kuvvetler aynı ölçekte; dümen kuvveti dönüşte diğerlerini aşabileceğinden ok boyu sınırlanır
+  const fmax = Math.max(1, cur.drive, cur.side, cur.hull_drag), sc = 72 / fmax;
+  const L = (f) => Math.sign(f) * Math.min(95, Math.abs(f) * sc);
+  const ce = [cx, cy - 0.2 * k], st = [cx, cy + 2.1 * k];
+  arrow(c, ce[0], ce[1], ce[0], ce[1] - L(cur.drive), "#7c3aed", 2.6);
+  arrow(c, ce[0], ce[1], ce[0] + s * L(cur.side), ce[1], "#7c3aed", 2.2, [5, 3]);
+  arrow(c, cx, cy + 0.6 * k, cx - s * L(cur.side), cy + 0.6 * k, "#64748b", 2.2, [5, 3]);
+  arrow(c, cx, cy + 1.4 * k, cx, cy + 1.4 * k + L(cur.hull_drag), "#64748b", 2.6);
+  arrow(c, st[0], st[1], st[0] - L(cur.rudder_force), st[1], "#dc2626", 2.6);
+  // net dönme momenti yayı
+  const nm = cur.rudder_moment + cur.sail_moment;
+  if (Math.abs(nm) > 1) {
+    const r0 = 3.4 * k, a0 = -Math.PI / 2, sweep = Math.max(-1, Math.min(1, nm / 400)) * 0.9;
+    c.strokeStyle = "#0f766e"; c.lineWidth = 1.8; c.beginPath(); c.arc(cx, cy, r0, a0, a0 + sweep, sweep < 0); c.stroke();
+    // ok ucu yayın teğeti boyunca: ekranda açı saat yönünde artar (+ moment = sancağa dönüş)
+    const ae = a0 + sweep, tx = cx + r0 * Math.cos(ae), ty = cy + r0 * Math.sin(ae), sg = Math.sign(sweep);
+    arrow(c, tx + sg * 8 * Math.sin(ae), ty - sg * 8 * Math.cos(ae), tx, ty, "#0f766e", 1.8);
+  }
+  const rows = [
+    ["#7c3aed", "Yelken itkisi T", cur.drive.toFixed(0) + " N"],
+    ["#7c3aed", "Yan kuvvet F_yan (rüzgar altına)", cur.side.toFixed(0) + " N"],
+    ["#64748b", "Yanal direnç (salma + gövde)", cur.side.toFixed(0) + " N"],
+    ["#64748b", "Gövde direnci R", cur.hull_drag.toFixed(0) + " N"],
+    ["#dc2626", "Dümen kuvveti Y_d (+ iskeleye)", fmtS(cur.rudder_force, 0) + " N"],
+    ["#0f766e", "Net moment N_d + N_y (+ sancağa)", fmtS(nm, 0) + " N·m"],
+  ];
+  $("flist").innerHTML = rows.map((r) => "<span class='sw' style='background:" + r[0] + "'></span><span>" + r[1] + "</span><span class='n'>" + r[2] + "</span>").join("");
+}
+function render() {
+  const cur = S.data && S.data.t.length ? sampleAt(S.simT) : null;
+  if (cur) { const g = lineGeom(); cur.along = (cur.x - S.a[0]) * g.u[0] + (cur.y - S.a[1]) * g.u[1]; }
+  drawMap(cur && !S.pending ? cur : null); drawOverview(cur); drawStrip(cur); updatePanel(cur); drawForces(cur);
+  $("clock").textContent = S.simT.toFixed(1) + " / " + S.T.toFixed(1) + " s";
+  $("scrub").value = S.T > 0 ? Math.round(1000 * S.simT / S.T) : 0;
+  syncHeight();
+}
+
+// ---------------- Oynatma ----------------
+function setPlaying(on) {
+  S.playing = on && S.data && S.T > 0;
+  $("playBtn").textContent = S.playing ? "⏸ Duraklat" : "▶ Oynat";
+  if (S.playing) { S.lastFrame = performance.now(); requestAnimationFrame(tick); }
+}
+function tick(now) {
+  if (!S.playing) return;
+  const dt = Math.min(0.1, (now - S.lastFrame) / 1000); S.lastFrame = now;
+  S.simT = Math.min(S.T, S.simT + dt * S.speed);
+  render();
+  if (S.simT >= S.T) { setPlaying(false); return; }
+  requestAnimationFrame(tick);
+}
+$("playBtn").onclick = () => { if (!S.playing && S.simT >= S.T) S.simT = 0; setPlaying(!S.playing); };
+$("restartBtn").onclick = () => { S.simT = 0; render(); setPlaying(true); };
+$("speedSel").onchange = (e) => { S.speed = +e.target.value; };
+$("scrub").oninput = (e) => { S.simT = S.T * e.target.value / 1000; render(); };
+
+// ---------------- Görünüm modları ve A / B sürükleme ----------------
+function setFollow(on) {
+  S.follow = on;
+  $("mFollow").classList.toggle("on", on); $("mAll").classList.toggle("on", !on);
+  $("ov").style.display = on ? "block" : "none";
+  map.style.cursor = on ? "default" : "grab";
+  $("modeHint").textContent = on ? "Harita tekneyi izliyor (≈120 m) · sol alt: tüm rota" :
+    "A ve B'yi sürükle · boş alanı sürükle: kaydır · Ctrl+tekerlek: yakınlaştır";
+  if (!on && !S.userView) fitAll();
+  render();
+}
+$("mFollow").onclick = () => setFollow(true);
+$("mAll").onclick = () => { S.userView = false; setFollow(false); };
+function zoom(f) { if (S.follow) { S.zoomFollow = Math.max(0.2, Math.min(8, S.zoomFollow * f)); } else { S.view.s *= f; S.userView = true; } render(); }
+$("zIn").onclick = () => zoom(1.4); $("zOut").onclick = () => zoom(1 / 1.4);
+const snap = (v) => Math.round(v / 10) * 10;
+function hitTest(px, py) {
+  if (S.follow || !S.a) return null;
+  const a = toScr(S.a[0], S.a[1]), b = toScr(S.b[0], S.b[1]);
+  const da = Math.hypot(a[0] - px, a[1] - py), db = Math.hypot(b[0] - px, b[1] - py);
+  if (Math.min(da, db) > 14) return null;
+  return da <= db ? "a" : "b";
+}
+function evXY(e) { const r = map.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+function showTip(px, py, text) { const t = $("tip"); t.style.display = "block"; t.textContent = text; t.style.left = (px + 14) + "px"; t.style.top = (py + 12) + "px"; }
+map.addEventListener("pointerdown", (e) => {
+  if (S.follow || !S.a) return;
+  const [px, py] = evXY(e), hit = hitTest(px, py);
+  map.setPointerCapture(e.pointerId);
+  if (hit) { S.drag = { type: "pt", hit: hit, moved: false }; setPlaying(false); }
+  else { S.drag = { type: "pan", x: px, y: py, cx: S.view.cx, cy: S.view.cy }; map.style.cursor = "grabbing"; }
+});
+map.addEventListener("pointermove", (e) => {
+  if (!S.a) return;
+  const [px, py] = evXY(e);
+  if (S.drag && S.drag.type === "pt") {
+    const wpt = toWorld(px, py), p = S.drag.hit === "a" ? S.a : S.b; p[0] = snap(wpt[0]); p[1] = snap(wpt[1]); S.drag.moved = true;
+    showTip(px, py, (S.drag.hit === "a" ? "A" : "B") + ": (" + p[0] + ", " + p[1] + ") m"); render(); return;
+  }
+  if (S.drag && S.drag.type === "pan") { S.view.cx = S.drag.cx - (px - S.drag.x) / S.view.s; S.view.cy = S.drag.cy + (py - S.drag.y) / S.view.s; S.userView = true; render(); return; }
+  if (S.follow) { $("tip").style.display = "none"; return; }
+  const hit = hitTest(px, py); if (hit !== S.hover) { S.hover = hit; render(); }
+  map.style.cursor = hit ? "move" : "grab";
+  const wpt = toWorld(px, py); showTip(px, py, hit ? (hit === "a" ? "A" : "B") + " noktasını sürükle" : "(" + wpt[0].toFixed(0) + ", " + wpt[1].toFixed(0) + ") m");
+});
+map.addEventListener("pointerup", () => {
+  const d = S.drag; S.drag = null; if (!S.follow) map.style.cursor = "grab";
+  if (d && d.type === "pt" && d.moved) {
+    S.pending = true; $("busy").style.display = "block"; setPlaying(false); render();
+    setValue({ a: S.a.slice(), b: S.b.slice(), token: Date.now() + "-" + Math.random().toString(36).slice(2, 8) });
+  }
+});
+map.addEventListener("pointerleave", () => { $("tip").style.display = "none"; if (S.hover) { S.hover = null; render(); } });
+map.addEventListener("wheel", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  e.preventDefault(); zoom(Math.exp(-e.deltaY * 0.0015));
+}, { passive: false });
+window.addEventListener("resize", () => { if (!S.follow && !S.userView) fitAll(); render(); });
+
+// ---------------- Streamlit'ten gelen veri ----------------
+function onRender(a) {
+  if (a.height && map.style.height !== a.height + "px") map.style.height = a.height + "px";
+  S.wind = a.wind || 8; S.cfg = a.cfg || {};
+  if (a.run_id === S.runId) {
+    if (S.pending) { S.pending = false; $("busy").style.display = "none"; S.a = a.a.slice(); S.b = a.b.slice(); }
+    render(); return;
+  }
+  S.runId = a.run_id; S.a = a.a.slice(); S.b = a.b.slice(); S.bearing = a.bearing; S.L = a.length;
+  S.data = a.result; S.T = S.data && S.data.t.length ? S.data.t[S.data.t.length - 1] : 0;
+  S.pending = false; $("busy").style.display = "none";
+  let sp = SPEEDS[0]; for (const v of SPEEDS) if (S.T / v >= 25) sp = v;      // tüm koşu ≈ 25–60 s'de izlensin
+  S.speed = sp; $("speedSel").value = String(sp);
+  if (!S.follow && !S.userView) fitAll();
+  S.simT = 0; render(); setPlaying(true);
+}
+setFollow(true);
+</script>
+</body>
+</html>

@@ -15,13 +15,15 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from matplotlib.patches import Wedge
 
+import line_follow as lf
 import navigation as nav
 import saildrone_model as sm
 
 # Streamlit (ve Streamlit Cloud'un git güncellemesi) değişen yerel modülleri her zaman yeniden
-# yüklemez; app.py yeni, modeller eski kalırsa uygulama çöker. Model önce, navigasyon sonra yüklenir.
+# yüklemez; app.py yeni, modeller eski kalırsa uygulama çöker. Model önce, ona bağlı modüller sonra yüklenir.
 sm = importlib.reload(sm)
 nav = importlib.reload(nav)
+lf = importlib.reload(lf)
 
 # --- SAYFA VE ARAYÜZ YAPILANDIRMASI ---
 st.set_page_config(
@@ -569,7 +571,7 @@ with st.sidebar:
         st.warning("Parametreler varsayılandan farklı: hız poları ve orsaya kaçma, yukarıdaki λ ve ω_wh ile ölçeklenir. "
                    "Rapordaki sayısal sonuçlar varsayılan tekne içindir.")
 
-tab_free, tab_nav = st.tabs(["⛵ Serbest Seyir", "🎯 Hedefe Navigasyon"])
+tab_free, tab_nav, tab_line = st.tabs(["⛵ Serbest Seyir", "🎯 Hedefe Navigasyon", "📏 Düz Rota (PID)"])
 
 with tab_free:
     col_ctrl, col_graph = st.columns([1.1, 2.0], gap="large")
@@ -1094,3 +1096,243 @@ with tab_nav:
             st.caption("Değerler, rota simülasyonunun kullandığı fonksiyonlarla ve kenar çubuğundaki fiziksel "
                        "parametrelerle hesaplanır. 'sim' değerleri simülasyonun kaydettiği bir sonraki adımdır; "
                        "formül sonucuyla aynı olmalıdır. Kerteriz ve pruva pusula açısıdır (0° = kuzey, rüzgarın geldiği yön).")
+
+
+# --- DÜZ ROTA (PID) SEKMESİ ---
+# Tekne A'dan B'ye düz çizgide gider; çizgiden sapma kaskad PID ile (sapma → hedef pruva → dümen) düzeltilir.
+# Fizik ve kontrolcü line_follow.py içindedir; harita, oynatma, PID katkıları ve kuvvet diyagramı tek bir
+# özel bileşende (components/line_player/index.html) çizilir.
+_line_player = components.declare_component(
+    "line_player", path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "components", "line_player"))
+
+LINE_INPUTS = {"ln_wind": 8, "ln_ax": 0, "ln_ay": 0, "ln_bx": 520, "ln_by": 300, "ln_off": 30, "ln_herr": 0}
+LINE_TUNING = (   # (grup, [(anahtar, LineConfig alanı, etiket, min, maks, adım, biçim, açıklama)])
+    ("Dış döngü · sapma → hedef pruva", [
+        ("ln_kp_xte", "kp_xte", "Kp (°/m)", 0.0, 20.0, 0.1, "%.2f", "Δψ_P = −Kp·e: her metre sapma için pruva düzeltmesi."),
+        ("ln_ki_xte", "ki_xte", "Ki (°/(m·s))", 0.0, 1.0, 0.01, "%.3f", "Kalıcı sapmayı (yan kayma, orsaya kaçma) sıfırlar."),
+        ("ln_kd_xte", "kd_xte", "Kd (°/(m/s))", 0.0, 30.0, 0.5, "%.1f", "ė: sapmanın değişim hızı (GPS hız vektöründen)."),
+        ("ln_max_int", "max_intercept", "En büyük yaklaşma açısı (°)", 5.0, 60.0, 1.0, "%.0f",
+         "|Δψ| sınırı: çizgiye en fazla bu açıyla yaklaşılır."),
+    ]),
+    ("İç döngü · pruva → dümen", [
+        ("ln_kp_hdg", "kp_hdg", "Kp (°/°)", 0.0, 5.0, 0.05, "%.2f", "δr_P = Kp·ε, ε = ψ* − ψ."),
+        ("ln_ki_hdg", "ki_hdg", "Ki (1/s)", 0.0, 1.0, 0.01, "%.3f", "Kalıcı pruva hatasını sıfırlar (|ε| < 10° iken birikir)."),
+        ("ln_kd_hdg", "kd_hdg", "Kd (s)", 0.0, 10.0, 0.1, "%.2f", "δr_D = −Kd·r: dönüş hızını frenler (sönüm)."),
+    ]),
+    ("Dinamik (varsayım)", [
+        ("ln_yaw_t", "yaw_t_nd", "Nomoto T' (boyutsuz)", 0.2, 10.0, 0.1, "%.1f", "Dönüş ataleti: T = T'·L/v (9 m/s'de ≈ 1 s)."),
+        ("ln_rud_rate", "rudder_rate", "Dümen hızı (°/s)", 1.0, 60.0, 1.0, "%.0f", "Dümen servosunun en büyük açılma hızı."),
+        ("ln_lat_ratio", "lat_ratio", "Yanal / ileri direnç oranı", 5.0, 500.0, 5.0, "%.0f",
+         "k_yan = n·k_g: 50 → orsada ≈ 4° yan kayma."),
+    ]),
+)
+LINE_TOGGLES = (   # (anahtar, LineConfig alanı, etiket, açıklama)
+    ("ln_leeway", "leeway", "Yan kayma (leeway)", "Yelkenin yan kuvveti tekneyi rüzgar altına iter: v_yan = F_yan / (n·k_g)."),
+    ("ln_ff", "feedforward", "İleri besleme",
+     "Kontrolcü yelken kuvvetinden orsaya kaçmayı dengeleyen dümeni ve yan kayma payını hesaplayıp PID çıktısına ekler."),
+    ("ln_gs", "gain_schedule", "Hıza göre kazanç",
+     "Türev kazançları v_ref / v ile büyür: tekne yavaşlayınca dümen etkisi azalsa da sönüm aynı kalır."),
+    ("ln_dp", "depower", "Yelken boşaltma",
+     "Dümen rüzgar altına doyduğu hâlde tekne rüzgardan uzaklaşamıyorsa (orsaya kaçma dümeni yeniyorsa) yelken boşaltılır."),
+)
+LINE_SERIES = ("t x y psi psi_des cog e delta delta_cmd sail depower v v_lat leeway_angle twa r p_xte i_xte d_xte "
+               "p_hdg i_hdg d_hdg ff_hdg crab drive side hull_drag rudder_force rudder_moment sail_moment").split()
+LINE_CSV_COLUMNS = {
+    "t": "t (s)", "x": "Doğu x (m)", "y": "Kuzey y (m)", "e": "Sapma e (m)", "psi": "Pruva ψ (°)",
+    "psi_des": "Hedef pruva ψ* (°)", "cog": "Gidiş COG (°)", "delta": "Dümen δr (°)", "delta_cmd": "Dümen komutu (°)",
+    "sail": "Bom δs (°, + sancak)", "v": "Hız (m/s)", "leeway_angle": "Yan kayma λ (°)", "p_xte": "Dış P (°)",
+    "i_xte": "Dış I (°)", "d_xte": "Dış D (°)", "crab": "Dış İB (°)", "p_hdg": "İç P (°)", "i_hdg": "İç I (°)",
+    "d_hdg": "İç D (°)", "ff_hdg": "İç İB (°)", "drive": "Yelken itkisi T (N)", "side": "Yan kuvvet F_yan (N)",
+    "rudder_force": "Dümen kuvveti Y_d (N)", "depower": "Yelken boşaltma (0–1)",
+}
+
+
+def line_clamp(v):
+    return int(max(-COORD_LIM, min(COORD_LIM, round(float(v)))))
+
+
+def reset_line_tuning():
+    d = lf.LineConfig()
+    for _g, _fields in LINE_TUNING:
+        for _key, _field, *_ in _fields:
+            st.session_state[_key] = float(getattr(d, _field))
+    for _key, _field, *_ in LINE_TOGGLES:
+        st.session_state[_key] = bool(getattr(d, _field))
+
+
+@st.cache_data(show_spinner=False, max_entries=32)
+def run_line(a, b, wind_ms, cfg_values, phys_values):
+    return lf.simulate_line(a, b, wind_ms, lf.LineConfig(*cfg_values), sm.Physics(*phys_values))
+
+
+def line_payload(res, max_samples=2500):
+    """Oynatıcıya gönderilecek (seyreltilmiş) zaman serileri."""
+    n = len(res.data["t"])
+    idx = np.arange(0, n, max(1, int(np.ceil(n / max_samples))))
+    if idx[-1] != n - 1:
+        idx = np.append(idx, n - 1)
+    return {k: [round(float(v), 3) for v in res.data[k][idx]] for k in LINE_SERIES}
+
+
+def line_formula_rows(res, cfg, twa_line, allow_dead, mt):
+    """Kontrolcü ve dinamik denklemleri: (adım, formül, bu koşunun değeri) satırları."""
+    on = lambda flag: "açık" if flag else "kapalı"      # noqa: E731
+    lim = sm.NO_GO_DEG + lf.DEAD_ZONE_MARGIN
+    return [
+        ("Rota ve sapma", r"$\beta=\mathrm{atan2}(x_B-x_A,\,y_B-y_A)$, $e=(\mathbf{p}-\mathbf{A})\cdot\mathbf{n}$, $\dot e=\mathbf{V}\cdot\mathbf{n}$",
+         f"β = {res.bearing:.1f}°, L = {res.length:.0f} m, TWA_β = {twa_line:.1f}°"),
+        ("Hıza göre kazanç", r"$g=\mathrm{sat}(v_{ref}/v,\;1,\;6)$", f"v_ref = {cfg.v_ref:.0f} m/s ({on(cfg.gain_schedule)})"),
+        ("Dış PID (sapma → pruva)",
+         r"$\Delta\psi=-\mathrm{sat}\big(K_pe+K_i\!\int\!e\,dt+K_d\,g\,\dot e,\;\pm\Delta\psi_{max}\big)+\psi_{\text{İB}}$",
+         f"Kp = {cfg.kp_xte:g} °/m, Ki = {cfg.ki_xte:g} °/(m·s), Kd = {cfg.kd_xte:g} °/(m/s), Δψ_max = {cfg.max_intercept:.0f}°"),
+        ("İleri besleme (pruva)", r"$\psi_{\text{İB}}=-s\,\lambda$ (yan kayma kadar rüzgara pay)", on(cfg.feedforward)),
+        ("Hedef pruva", r"$\psi^*=\beta+\Delta\psi,\;\;\theta(\psi^*)\ge" + f"{lim:.0f}" + r"^\circ$",
+         "ölü açı sınırı kapalı (izin verildi)" if allow_dead else "ölü açıya girmez"),
+        ("İç PID (pruva → dümen)",
+         r"$\delta_{r,k}=\mathrm{sat}\big(\delta_{\text{İB}}+K_p\varepsilon+K_i\!\int\!\varepsilon\,dt-K_d\,g\,r,\;\pm35^\circ\big),\;\varepsilon=\psi^*-\psi$",
+         f"Kp = {cfg.kp_hdg:g}, Ki = {cfg.ki_hdg:g} 1/s, Kd = {cfg.kd_hdg:g} s"),
+        ("İleri besleme (dümen)", r"$\delta_{\text{İB}}=\arcsin\!\big(-r_{yelken}L/v\big)$ (orsaya kaçmayı dengeler, Rotayı Tut)",
+         on(cfg.feedforward)),
+        ("Anti-windup", r"I terimleri yalnızca $\lvert e\rvert<" + f"{lf.I_ZONE_XTE:.0f}" + r"$ m, $\lvert\varepsilon\rvert<"
+         + f"{lf.I_ZONE_HDG:.0f}" + r"^\circ$ iken ve çıkış doymamışken birikir", f"iç I ≤ ±{lf.I_MAX_HDG:.0f}°"),
+        ("Dümen servosu", r"$\lvert\dot\delta_r\rvert\le\dot\delta_{max},\;\lvert\delta_r\rvert\le35^\circ$",
+         f"δ̇_max = {cfg.rudder_rate:g} °/s, en büyük δr = {mt['max_abs_rudder']:.1f}°"),
+        ("Dönüş (Nomoto)", r"$T\dot r+r=\frac{v}{L}\sin\delta_r+r_{yelken},\;T=T'L/v$",
+         f"T' = {cfg.yaw_t_nd:g}, L = {phys.hull_length:.2f} m"),
+        ("Orsaya kaçma", r"$r_{yelken}=-\dfrac{s\,F_{yan}\,e_{CE}}{\tfrac12\rho_{su}A_dC_{L\alpha}x_dL\,v}$",
+         f"e_CE = {phys.ce_offset:+.2f} m"),
+        ("Yan kayma", r"$v_{yan}=\dfrac{F_{yan}}{n\,k_g},\;\lambda=\arctan(v_{yan}/v)$",
+         f"n = {cfg.lat_ratio:g} ({on(cfg.leeway)}), en büyük λ = {mt['max_leeway']:.1f}°"),
+        ("İleri hız", r"$v^+=V^*+(v-V^*)\,e^{-\Delta t/\tau},\;V^*=\lambda_hU\rho(\theta)\,\eta\,\kappa$",
+         f"τ = {phys.tau:.2f} s, Δt = {cfg.dt:g} s"),
+        ("Yelken boşaltma", r"$\delta_{r,k}$ rüzgar altına doymuş, $s\,\delta_r>33^\circ$ ve $s\,r<"
+         + f"{cfg.depower_rate:g}" + r"^\circ/\mathrm{s}$ → bom $\delta_{opt}\to\theta-4^\circ$",
+         f"{on(cfg.depower)}, {mt['depower_time']:.1f} s"),
+    ]
+
+
+with tab_line:
+    _d = lf.LineConfig()
+    for _k, _v in LINE_INPUTS.items():
+        st.session_state.setdefault(_k, _v)
+    for _g, _fields in LINE_TUNING:
+        for _key, _field, *_ in _fields:
+            st.session_state.setdefault(_key, float(getattr(_d, _field)))
+    for _key, _field, *_ in LINE_TOGGLES:
+        st.session_state.setdefault(_key, bool(getattr(_d, _field)))
+    st.session_state.setdefault("ln_map_token", None)
+
+    # Haritada A / B sürüklendiyse yeni konumlar widget'lar oluşturulmadan önce girdilere yazılır
+    _edit = st.session_state.pop("ln_pending_edit", None) or st.session_state.get("line_player")
+    if isinstance(_edit, dict) and _edit.get("token") and _edit["token"] != st.session_state["ln_map_token"]:
+        st.session_state["ln_ax"], st.session_state["ln_ay"] = line_clamp(_edit["a"][0]), line_clamp(_edit["a"][1])
+        st.session_state["ln_bx"], st.session_state["ln_by"] = line_clamp(_edit["b"][0]), line_clamp(_edit["b"][1])
+        st.session_state["ln_map_token"] = _edit["token"]
+
+    st.markdown("### 📏 A'dan B'ye düz rota · kaskad PID")
+    st.caption("Tekne A–B doğrusunun üzerinde kalmaya çalışır: dış döngü çizgiden sapmayı (e) ölçüp hedef pruvayı (ψ*), "
+               "iç döngü pruva hatasından dümen açısını hesaplar. Dönüş ataletli, dümen hız sınırlı; yan kayma tekneyi "
+               "rüzgar altına iter. Rüzgar her zaman kuzeyden eser.")
+    _c = st.columns(7)
+    ln_wind = _c[0].number_input("💨 Rüzgar (m/s)", 1, 25, step=1, key="ln_wind")
+    ax = _c[1].number_input("A · Doğu x (m)", -COORD_LIM, COORD_LIM, step=10, key="ln_ax")
+    ay = _c[2].number_input("A · Kuzey y (m)", -COORD_LIM, COORD_LIM, step=10, key="ln_ay")
+    bx = _c[3].number_input("B · Doğu x (m)", -COORD_LIM, COORD_LIM, step=10, key="ln_bx")
+    by = _c[4].number_input("B · Kuzey y (m)", -COORD_LIM, COORD_LIM, step=10, key="ln_by")
+    ln_off = _c[5].number_input("↔ Başlangıç sapması (m)", -200, 200, step=5, key="ln_off",
+                                help="Teknenin A'ya göre çizgiye dik kaydırması. +: A→B yönüne göre çizginin sağı (sancak tarafı).")
+    ln_herr = _c[6].number_input("↻ Pruva hatası (°)", -90, 90, step=5, key="ln_herr",
+                                 help="Başlangıç pruvası − rota kerterizi. +: pruva çizginin sağına (sancağa) bakar.")
+    _toggles = {}
+    for _col, (_key, _field, _label, _help) in zip(st.columns(4), LINE_TOGGLES):
+        _toggles[_field] = _col.checkbox(_label, key=_key, help=_help)
+
+    with st.expander("⚙️ PID kazançları ve dinamik parametreler", expanded=False):
+        _tuning = {}
+        for _col, (_group, _fields) in zip(st.columns(3), LINE_TUNING):
+            _col.markdown(f"**{_group}**")
+            for _key, _field, _label, _lo, _hi, _step, _fmt, _help in _fields:
+                _tuning[_field] = float(_col.number_input(_label, _lo, _hi, step=_step, format=_fmt, key=_key, help=_help))
+        st.button("↩️ Varsayılan kazançlara dön", on_click=reset_line_tuning)
+        st.caption("Varsayılan kazançlar 12 senaryoluk (iki kontra, orsa–pupa, 3–15 m/s, ±25–30 m sapma, ±25° pruva hatası) "
+                   "ızgara taramasıyla seçildi: aşım + RMS sapma + dümen kullanımı + oturma süresi en küçük.")
+
+    if (ax, ay) == (bx, by):
+        st.error("A ve B aynı nokta olamaz.")
+        st.stop()
+
+    _bearing, _twa_line, _status = lf.line_status((ax, ay), (bx, by))
+    allow_dead = False
+    if _status == "dead":
+        st.warning(f"⚠️ **A→B rotası ölü açıda:** kerteriz {_bearing:.0f}°, rüzgar pruvaya {_twa_line:.0f}° geliyor "
+                   f"(≤ {sm.NO_GO_DEG:.0f}°). Yelkenli bu doğrultuda ilerleyemez; düz çizgi takibi mümkün değil.")
+        _choice = st.radio("Ne yapalım?", ["🚫 Engelle: simülasyonu çalıştırma",
+                                           "▶️ İzin ver: tekne denesin, durduğunu göster"],
+                           index=None, horizontal=True, key=f"ln_dead_choice_{ax}_{ay}_{bx}_{by}")
+        if _choice is None:
+            st.info("Devam etmek için yukarıdaki seçeneklerden birini seçin.")
+            st.stop()
+        if _choice.startswith("🚫"):
+            st.error("Simülasyon engellendi. B'yi rüzgara 35°'den geniş bir açıya taşıyın ya da rüzgara karşı hedefe "
+                     "Hedefe Navigasyon sekmesinde zikzakla (tack) gidin.")
+            st.stop()
+        allow_dead = True
+        st.caption(f"Tekne en yakın yelken açılabilen pruvadan ({lf.clamp_heading_to_sailable(_bearing, _bearing):03.0f}°) "
+                   "başlatılır; kontrolcü onu çizgi yönüne, yani rüzgara çevirdikçe yelken yapraklar ve tekne durur.")
+    elif _status == "edge":
+        st.warning(f"⚠️ Rota ölü açı sınırına çok yakın (TWA {_twa_line:.0f}°): hedef pruva "
+                   f"{sm.NO_GO_DEG + lf.DEAD_ZONE_MARGIN:.0f}°'nin altına inemez; yan kaymayı telafi etmek için gereken "
+                   "rüzgar payı verilemeyebilir.")
+    _psi0 = sm.wrap360(_bearing + ln_herr)
+    if not allow_dead and sm.true_wind_angle(_psi0) <= sm.NO_GO_DEG:
+        st.warning(f"⚠️ Başlangıç pruvası {_psi0:03.0f}° ölü açıda: tekne hız alamaz, dümen etkisizdir ve olduğu yerde kalır.")
+    if _status != "dead" and _twa_line < 50.0 and sm.leeward_sign(_bearing) * ln_off > 0:
+        st.info(f"ℹ️ Tekne orsa çizgisinin rüzgar altında başlıyor: çizgiye dönmek için rüzgara doğru en fazla "
+                f"{max(0.0, _twa_line - sm.NO_GO_DEG - lf.DEAD_ZONE_MARGIN):.0f}° açıyla gidebilir ve yan kayma bunun bir "
+                "kısmını yer; dönüş yavaş olur.")
+
+    cfg = lf.LineConfig(**_tuning, **_toggles, schedule_outer=_toggles["gain_schedule"],
+                        start_offset=float(ln_off), start_heading_err=float(ln_herr), allow_dead_zone=allow_dead)
+    _phys_values = dataclasses.astuple(phys)
+    res = run_line((float(ax), float(ay)), (float(bx), float(by)), float(ln_wind), dataclasses.astuple(cfg), _phys_values)
+    _run_id = hashlib.md5(json.dumps([ax, ay, bx, by, ln_wind, dataclasses.astuple(cfg), _phys_values]).encode()).hexdigest()[:12]
+    _val = _line_player(run_id=_run_id, a=[ax, ay], b=[bx, by], bearing=res.bearing, length=res.length,
+                        wind=float(ln_wind), cfg=dict(max_intercept=cfg.max_intercept, settle_band=lf.SETTLE_BAND),
+                        result=line_payload(res), height=430, key="line_player", default=None)
+    if isinstance(_val, dict) and _val.get("token") and _val["token"] != st.session_state["ln_map_token"]:
+        st.session_state["ln_pending_edit"] = _val      # düzenleme bu çalıştırmada uygulanamadıysa
+        st.rerun()
+
+    _mt = res.metrics
+    _left = max(0.0, res.length - float(res.data["along"][-1]))
+    if res.status == "reached":
+        st.success(f"✅ B'ye ulaşıldı: {_mt['time']:.0f} s, ortalama hız {_mt['mean_speed'] * sm.MS_TO_KTS:.1f} kn, "
+                   f"B hizasında sapma {_mt['final_e']:+.2f} m")
+    elif res.status == "stopped":
+        st.error(f"⛔ {res.reason[0].upper() + res.reason[1:]}: t = {_mt['time']:.0f} s, B'ye {_left:.0f} m kaldı.")
+    else:
+        st.warning(f"⏱️ {res.reason[0].upper() + res.reason[1:]}: t = {_mt['time']:.0f} s, B'ye {_left:.0f} m kaldı.")
+    _m = st.columns(6)
+    _m[0].metric("En büyük sapma", f"{_mt['max_abs_e']:.1f} m")
+    _m[1].metric("Aşım (karşı taraf)", f"{_mt['overshoot']:.1f} m",
+                 help="Başlangıç sapması varken çizgiyi geçtikten sonra karşı tarafa en fazla ne kadar gidildi.")
+    _m[2].metric("Oturma süresi", "–" if _mt["settle_time"] is None else f"{_mt['settle_time']:.0f} s",
+                 help=f"|e| ≤ {lf.SETTLE_BAND:.0f} m bandına girip bir daha çıkmadığı an.")
+    _m[3].metric("RMS sapma (son yarı)", f"{_mt['rms_e_second_half']:.2f} m")
+    _m[4].metric("Dümen kullanımı", f"{_mt['rudder_travel']:.0f}°",
+                 help=f"Σ|Δδr|: dümenin toplam hareketi. En büyük açı {_mt['max_abs_rudder']:.1f}°.")
+    _m[5].metric("En büyük yan kayma", f"{_mt['max_leeway']:.1f}°")
+    if _mt["depower_time"] > 0:
+        st.caption(f"⛵ Yelken {_mt['depower_time']:.1f} s boşaltıldı: dümen tam açıkken orsaya kaçma tekneyi "
+                   "rüzgardan uzaklaştırmaya izin vermedi.")
+
+    _csv = pd.DataFrame({LINE_CSV_COLUMNS[k]: np.round(res.data[k], 4) for k in LINE_CSV_COLUMNS})
+    st.download_button("⬇️ Zaman serisini indir (CSV)", _csv.to_csv(index=False).encode("utf-8-sig"),
+                       file_name="duz_rota_pid.csv", mime="text/csv")
+
+    with st.expander("🧮 Kontrolcü ve dinamik denklemleri", expanded=False):
+        st.markdown("| Adım | Formül | Bu koşu |\n|---|---|---|\n"
+                    + "\n".join(f"| {a} | {f} | {v} |" for a, f, v in line_formula_rows(res, cfg, _twa_line, allow_dead, _mt)))
+        st.caption("s: rüzgar altı bordası (+1 iskele kontra, −1 sancak kontra). Diğer sekmelerle aynı polar, trim verimi, "
+                   "dümen sürüklemesi ve fiziksel parametreler (kenar çubuğu) kullanılır; kararlı durumda dönüş hızı "
+                   "serbest seyir modeline eşittir.")
