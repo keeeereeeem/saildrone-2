@@ -146,14 +146,20 @@ analyze_points_of_sail_360 = sm.analyze_points_of_sail_360
 # --- SİMÜLASYON VE ÇİZİM ÇEKİRDEĞİ ---
 def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, sim_time_s, auto_trim=False, phys=sm.PHYS):
     """
-    330°-030° Ölü Açı sektörü, kumaş yelken poları, dümen kinematiği ve merkezi katamaran
+    Bom açısına bağlı ölü açı sektörü, kumaş yelken poları, dümen kinematiği ve merkezi katamaran
     görselleştirmesi (tek yelken modeli: Kumaş Yelken – Cambered / Klasik).
     """
     profile = sm.PROFILE
 
     # 1. BAŞLANGIÇ SEYİR DURUMU (360 Derece Analiz):
-    regime, opt_sail, max_speed_ratio, tack, wind_side, leeward_sign, desc = sm.analyze_points_of_sail_360(heading_deg)
-    is_in_irons = (regime == sm.NO_GO_REGIME)
+    # Ölü açı ±max(30°, |bom|): bom elle açıldıkça yelken rüzgara paralel kalacağı sektör genişler
+    manual_sail = None if auto_trim else sail_input_deg
+    regime, opt_sail, max_speed_ratio, tack, wind_side, leeward_sign, desc = sm.analyze_points_of_sail_360(
+        heading_deg, sail_deg=manual_sail)
+    twa = sm.true_wind_angle(heading_deg)
+    dead_zone = sm.dead_zone_deg(manual_sail)
+    is_in_irons = twa <= sm.NO_GO_DEG           # teknenin kendi sınırı: hiçbir bom açısında itki yok
+    in_dead_zone = (regime == sm.NO_GO_REGIME)  # bom açısına göre ölü açı: yelken yapraklar, itki yok
 
     # Otomatik trim seçeneği veya kullanıcının ayarı
     if auto_trim and not is_in_irons:
@@ -165,7 +171,8 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
     if is_in_irons:
         trim_efficiency, trim_status, badge_type, camber_amount = 0.0, "Yelken Dolmuyor (Yapraklıyor)", "badge-dead", 0.0
     else:
-        trim_efficiency, trim_status, badge_type, camber_amount = sm.trim_efficiency(sail_boom_angle, opt_sail, profile)
+        trim_efficiency, trim_status, badge_type, camber_amount = sm.trim_efficiency(
+            sail_boom_angle, opt_sail, profile, twa)
 
     # 3. DÜMEN VE FRENLEME ETKİSİ:
     rudder_clamped = float(np.clip(rudder_deg, -sm.RUDDER_MAX_DEG, sm.RUDDER_MAX_DEG))
@@ -188,12 +195,21 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
     fig.patch.set_facecolor('#ffffff')
     ax.set_facecolor('#f8fafc')
 
-    # 1. ÖLÜ AÇI (NO-GO ZONE) 330° - 030° SEKTÖRÜ (60 DERECE):
-    # Matematiksel açılar: 030° pusula = 60° mat, 330° pusula = 120° mat
-    no_go_wedge = Wedge((0, 0), 8.5, 60, 120, facecolor='#fee2e2', edgecolor='#ef4444', 
+    # 1. ÖLÜ AÇI (NO-GO ZONE) SEKTÖRÜ: rüzgar ekseni etrafında ±dead_zone (30°, bom elle açıldıkça genişler)
+    # Matematiksel açı = 90° − pusula açısı: ±dead_zone pusula -> [90° − dead_zone, 90° + dead_zone] mat
+    no_go_wedge = Wedge((0, 0), 8.5, 90 - dead_zone, 90 + dead_zone, facecolor='#fee2e2', edgecolor='#ef4444',
                         alpha=0.32, linestyle='--', lw=1.2, zorder=1)
     ax.add_patch(no_go_wedge)
-    ax.text(0, 5.5, "ÖLÜ AÇI (NO-GO ZONE)\n330° - 030° (Rüzgara Karşı)", 
+    no_go_txt = f"ÖLÜ AÇI (NO-GO ZONE)\n{360 - dead_zone:03.0f}° - {dead_zone:03.0f}° (Rüzgara Karşı)"
+    show_hull_limit = dead_zone - sm.NO_GO_DEG >= 10.0   # 030°/330° sınırı yalnızca bom sınırından ayrışınca çizilir
+    if dead_zone > sm.NO_GO_DEG:
+        no_go_txt += f"\nbom {sail_boom_angle:.0f}° açık → ±{dead_zone:.0f}°"
+    if show_hull_limit:
+        # Teknenin kendi sınırı (±30°): bom kasılsa bile bu sektörde itki yok
+        for sgn in (-1.0, 1.0):
+            ax.plot([0, sgn * 8.5 * np.sin(np.radians(sm.NO_GO_DEG))], [0, 8.5 * np.cos(np.radians(sm.NO_GO_DEG))],
+                    color='#ef4444', linestyle=':', lw=1.0, alpha=0.6, zorder=1)
+    ax.text(0, 5.5, no_go_txt,
             ha='center', va='center', color='#b91c1c', fontweight='bold', fontsize=8.2, zorder=2)
 
     # 2. Dairesel Pusula Kılavuzları (2m, 4m, 6m, 8m)
@@ -207,9 +223,13 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
     ax.text(0, -8.4, "180° GÜNEY", ha='center', va='top', fontsize=8.8, fontweight='bold', color='#1e293b')
     ax.text(-8.4, 0, "270° BATI", ha='right', va='center', fontsize=8.8, fontweight='bold', color='#1e293b')
 
-    # Ölü açı sınırları (030° ve 330°)
-    ax.text(4.3, 7.3, "030°", ha='left', va='bottom', fontsize=8.2, fontweight='bold', color='#dc2626')
-    ax.text(-4.3, 7.3, "330°", ha='right', va='bottom', fontsize=8.2, fontweight='bold', color='#dc2626')
+    # Ölü açı sınırları: teknenin sınırı (030° / 330°) ve bom genişlettiyse bom sınırı (pusula yönlerine çakışmadan)
+    edges = ([sm.NO_GO_DEG] if dead_zone == sm.NO_GO_DEG or show_hull_limit else []) + \
+            ([dead_zone] if sm.NO_GO_DEG < dead_zone <= 75.0 else [])
+    for edge in edges:
+        ex, ey = 8.5 * np.sin(np.radians(edge)), 8.5 * np.cos(np.radians(edge))
+        ax.text(ex, ey, f"{edge:03.0f}°", ha='left', va='bottom', fontsize=8.2, fontweight='bold', color='#dc2626')
+        ax.text(-ex, ey, f"{360 - edge:03.0f}°", ha='right', va='bottom', fontsize=8.2, fontweight='bold', color='#dc2626')
     ax.text(6.0, -6.0, "135°", ha='center', va='center', fontsize=7.8, color='#64748b')
     ax.text(-6.0, -6.0, "225°", ha='center', va='center', fontsize=7.8, color='#64748b')
 
@@ -293,7 +313,7 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
     tip_ly = 0.2 + boom_len * u_chord[1]
     tip_w = rot(tip_lx, tip_ly)
 
-    if is_in_irons:
+    if in_dead_zone:
         num_w = 20
         wt = np.linspace(0, 1, num_w)
         wave_lx = wt * tip_lx + 0.15 * np.sin(4 * np.pi * wt)
@@ -325,7 +345,7 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
         ax.add_patch(patches.Polygon(fill_poly_w, closed=True, facecolor='#2563eb', alpha=0.22, zorder=7))
 
     # 8. TEKNENİN GİTTİĞİ DOĞRULTU VE SİMÜLASYON YOLU:
-    if total_distance_m > 1.0 and not is_in_irons:
+    if total_distance_m > 1.0 and not in_dead_zone:
         max_dist_to_show = max(total_distance_m, 1.0)
         scale_factor = min(1.0, 7.2 / max_dist_to_show)
         scaled_tx = [x * scale_factor for x in traj_x]
@@ -354,7 +374,14 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
                 bbox=dict(boxstyle='round,pad=0.25', facecolor='#d1fae5', edgecolor='#10b981', alpha=0.95),
                 zorder=15)
     else:
-        ax.text(0, 0, "[!] ÖLÜ AÇI / İTKİ YOK\nYelken Dolmuyor (Kör Nokta)", color='#b91c1c', fontsize=8.5, fontweight='bold',
+        if is_in_irons:
+            no_drive_txt = "[!] ÖLÜ AÇI / İTKİ YOK\nYelken Dolmuyor (Kör Nokta)"
+        elif in_dead_zone:
+            no_drive_txt = (f"[!] ÖLÜ AÇI / İTKİ YOK: Bom ({sail_boom_angle:.0f}°) ≥ Rüzgar Açısı ({twa:.0f}°)\n"
+                            f"Yelken rüzgara paralel, yapraklıyor – bomu {opt_sail:.0f}°'ye kasın")
+        else:
+            no_drive_txt = f"[!] İTKİ ÇOK DÜŞÜK\n{sim_time_s:.0f} sn'de {total_distance_m:.1f} m"
+        ax.text(0, 0, no_drive_txt, color='#b91c1c', fontsize=8.5, fontweight='bold',
                 ha='center', va='center', bbox=dict(boxstyle='round,pad=0.35', facecolor='#fee2e2', edgecolor='#ef4444'),
                 zorder=15)
 
@@ -405,7 +432,7 @@ def simulate_catamaran(heading_deg, sail_input_deg, rudder_deg, wind_speed_ms, s
 
 # --- STREAMLIT ARAYÜZÜ ---
 st.markdown("## ⛵ Otonom Yelkenli Katamaran ve Saildrone Simülatörü")
-st.caption("360° Pusula Seyirleri • 330°-030° Ölü Açı • Kumaş Yelken (Cambered / Klasik) Polar Modeli • Realist Dümen")
+st.caption("360° Pusula Seyirleri • Ölü Açı ±max(30°, bom) • Kumaş Yelken (Cambered / Klasik) Polar Modeli • Realist Dümen")
 
 # --- TEKNENİN FİZİKSEL PARAMETRELERİ (KENAR ÇUBUĞU) ---
 # Her iki sekme de bu değerlerle kurulan sm.Physics nesnesini kullanır; değişiklikte sayfa yeniden
@@ -501,7 +528,7 @@ with tab_free:
             max_val=360,
             default_val=90,
             step=1,
-            help_text="330°-030°: Ölü Açı (60° No-Go), 030°-050°: Orsa, 050°-080°: Dar Apaz, 090°: Tam Apaz (En Hızlı), 135°: Geniş Apaz, 180°: Pupa, 270°: Sancak Kontra Tam Apaz."
+            help_text="330°-030°: Ölü Açı (60° No-Go; bom elle 30°'den fazla açılırsa ±bom açısına genişler), 030°-050°: Orsa, 050°-080°: Dar Apaz, 090°: Tam Apaz (En Hızlı), 135°: Geniş Apaz, 180°: Pupa, 270°: Sancak Kontra Tam Apaz."
         )
 
         # 3. Yelken Açısı ve Otomatik Trim
@@ -571,7 +598,8 @@ with tab_free:
                 </tbody>
             </table>
             <div style="font-size:0.75rem; color:#64748b; margin-top:5px;">
-            * Ölü Açı: 330° - 030° (TWA ≤ 30°): itki yok. Hız = λ × U × oran × trim verimi × dümen cezası
+            * Ölü Açı: TWA ≤ max(30°, bom açısı): itki yok. 330° - 030° teknenin kendi sınırıdır; bom rüzgar yönüne
+            kadar açılırsa (TWA ≤ bom) yelken rüzgara paralel kalıp yapraklar. Hız = λ × U × oran × trim verimi × dümen cezası
             (λ = hız ölçeği, varsayılan teknede 1; kenar çubuğundaki fiziksel parametrelerden türetilir).
             </div>
             """, unsafe_allow_html=True)
@@ -635,8 +663,14 @@ with tab_free:
         with st.expander("🧮 Kuvvet ve Moment Hesabı (kararlı hızda, N ve N·m)", expanded=False):
             fm = sm.force_moment_breakdown(boat_heading_val, sail_angle_val, rudder_angle_val,
                                            float(wind_speed_val), auto_trim=auto_trim_active, phys=phys)
-            if fm["drive"] == 0.0:
+            if fm["drive"] == 0.0 and fm["twa"] <= sm.NO_GO_DEG:
                 st.warning("Tekne ölü açıda: yelken yapraklıyor, itki ve yelken kuvveti sıfır; hız olmadığı için dümen de moment üretmez.")
+            elif fm["drive"] == 0.0:
+                st.warning(f"Bom ({fm['sail']:.0f}°) rüzgar açısına (TWA {fm['twa']:.0f}°) kadar boşlanmış, tekne bu bom "
+                           f"açısının ölü açısında (±{sm.dead_zone_deg(fm['sail']):.0f}°): hücum açısı "
+                           f"α = TWA − bom = {fm['twa'] - fm['sail']:.0f}° ≤ 0. Yelken rüzgara paralel, yapraklıyor; "
+                           f"itki ve yelken kuvveti sıfır. Bomu {fm['twa'] - sm.LUFF_DEG:.0f}°'nin altına kasın "
+                           f"(optimum {fm['opt']:.0f}°).")
             else:
                 st.markdown(f"""
 | Adım | Formül | Değer |

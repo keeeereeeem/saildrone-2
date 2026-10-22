@@ -61,21 +61,30 @@ def fig_polar():
 
 
 def fig_trim():
-    fig, ax0 = plt.subplots(1, 1, figsize=(6.4, 3.6))
-    axes = [ax0]
-    d = np.linspace(-60, 60, 481)
-    for ax, (k, name) in zip(axes, PROFILES.items()):
-        opt = 45.0
-        eta = [m.trim_efficiency(opt + x, opt, k)[0] for x in d]
-        ax.plot(d, eta, color=COLORS[k], lw=2)
-        tol = m.TRIM[k]["tol"]
-        ax.axvspan(-tol, tol, color="#22c55e", alpha=0.15)
-        ax.set_title(name + " – trim verimi")
-        ax.text(-55, 0.2, "fazla kasılı\n(düz / stall)", fontsize=8)
-        ax.text(25, 0.2, "fazla açık\n(yapraklama)", fontsize=8)
-        ax.set_xlabel("δ_s − δ_opt (°)")
-        ax.grid(alpha=0.3)
-    axes[0].set_ylabel("Trim verimi η")
+    """η(δs) üç seyir açısında: optimumda tepe, bom rüzgar yönüne (δs = θ) boşlanınca η = 0 (yapraklama)."""
+    fig, ax = plt.subplots(1, 1, figsize=(7.2, 4.0))
+    sails = np.linspace(0, 90, 721)
+    curves = [(40.0, "Orsa", "#2a78d6"), (55.0, "Dar apaz", "#eb6834"), (90.0, "Tam apaz", "#1baf7a")]
+    for twa, band, color in curves:
+        opt = m.polar_point(twa)[0]
+        eta = [m.trim_efficiency(s, opt, "cloth", twa)[0] for s in sails]
+        ax.plot(sails, eta, color=color, lw=2, label=f"θ = {twa:.0f}° ({band}, δ_opt = {opt:.0f}°)")
+        ax.plot([opt], [1.0], "o", color=color, ms=8, mec="white", mew=2, zorder=5)
+        if twa <= 90.0:
+            ax.plot([twa], [0.0], "o", color=color, ms=8, mec="white", mew=2, zorder=5)
+        ax.text(opt, 1.04, f"θ = {twa:.0f}°", ha="center", va="bottom", fontsize=8, color="#52514e")
+    ax.annotate("ψ = 055°, δs = 56°\nα = θ − δs = −1° → η = 0\n(yelken rüzgara paralel)", xy=(56, 0.0), xytext=(58, 0.42),
+                fontsize=8, color="#0b0b0b", arrowprops=dict(arrowstyle="->", color="#52514e", lw=1))
+    ax.text(2, 0.06, "fazla kasılı\n(düz / stall)", fontsize=8, color="#52514e")
+    ax.set_xlim(0, 90)
+    ax.set_ylim(0, 1.15)
+    ax.set_xlabel("Bom açısı δs (°)")
+    ax.set_ylabel("Trim verimi η")
+    ax.set_title("Kumaş yelken – trim verimi ve yapraklama sınırı (δs ≥ θ → η = 0)", fontsize=10)
+    ax.legend(loc="upper right", fontsize=8, frameon=False)
+    ax.grid(alpha=0.3)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
     fig.tight_layout()
     fig.savefig(os.path.join(FIG, "trim_efficiency.png"), dpi=130)
     plt.close(fig)

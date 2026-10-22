@@ -51,7 +51,14 @@ Serbest seyirde kullanıcı üç açıyı verir: **pruva $\psi_0$, yelken bom a�
 
 ### Adım 1 — Rüzgarın tekneye göre açısı
 
-$\theta = \min(\psi, 360°-\psi)$. $\theta \le 30°$ ise tekne **ölü açıdadır (330°–030°)**: kumaş yelken rüzgarı tutamaz, yapraklar, itki sıfırdır.
+$\theta = \min(\psi, 360°-\psi)$. Ölü açının genişliği yalnızca pruvaya değil, yelkenin bom açısına da bağlıdır:
+
+$$\theta_{ölü}(\delta_s) = \max\big(30°,\ \lvert\delta_s\rvert\big)$$
+
+$\theta \le \theta_{ölü}$ ise tekne **ölü açıdadır**: kumaş yelken rüzgarı tutamaz, yapraklar, itki sıfırdır.
+
+* **30° teknenin kendi sınırıdır (330°–030°).** Bom ne kadar kasılırsa kasılsın yelken kuvveti neredeyse tamamen yana yönelir; ileri bileşeni direnci yenemez. Auto-Trim'de bom her zaman optimum açıdadır, bu yüzden ölü açı 30°'dir.
+* **Bom elle 30°'den fazla açılırsa ölü açı genişler.** Bom rüzgar yönüne kadar açıldığında ($\theta \le \lvert\delta_s\rvert$) yelken rüzgara paralel kalır ve yapraklar (Adım 3, yapraklama sınırı). Örnek: $\delta_s = 56°$ için ölü açı 304°–056° olur; $\psi = 055°$ bu sektörün içindedir.
 
 ### Adım 2 — Seyir bandı: hız oranı ve optimum bom açısı
 
@@ -59,7 +66,7 @@ $\theta$ hangi banda düşerse kumaş yelkenin o banttaki **hız oranı** $\rho 
 
 | Bant | $\theta$ aralığı | $\delta_{opt}$ | $\rho = V_b/U$ | Yelkenin durumu |
 |---|---|---|---|---|
-| Ölü açı | $0°$–$30°$ | — | 0 | Yapraklar, itki yok |
+| Ölü açı | $0°$–$30°$ (elle trimde $0°$–$\max(30°, \lvert\delta_s\rvert)$) | — | 0 | Yapraklar, itki yok |
 | Orsa | $30°$–$50°$ | 16° | 0.62 | Iskota sonuna kadar kasılı |
 | Dar apaz | $50°$–$80°$ | 32° | 0.85 | Biraz boşlanmış, tor artar |
 | Tam apaz | $80°$–$120°$ | 46° | 1.15 | Tam dolu ve torlu (en hızlı seyir) |
@@ -75,6 +82,14 @@ Bomun optimum açıdan sapması $d = \lvert\,\lvert\delta_s\rvert - \delta_{opt}
 $$\eta(\delta_s) = \begin{cases} 1 - 0.05\,\dfrac{d}{6°}, & d \le 6° \quad \text{(tam trim)}\\[2mm] \max\!\left(0.15,\; 1 - \left(\dfrac{d}{25°}\right)^{1.6}\right), & \lvert\delta_s\rvert < \delta_{opt} \quad \text{(fazla kasılı: yelken düzleşir, akış kopar)}\\[2mm] \max\!\left(0.10,\; 1 - \left(\dfrac{d}{30°}\right)^{1.6}\right), & \lvert\delta_s\rvert > \delta_{opt} \quad \text{(fazla açık: ön kenar yapraklar)} \end{cases}$$
 
 Fazla açık dalın ölçeği (30°) fazla kasılı dalınkinden (25°) büyüktür: kumaş yelken boşlandığında itkiyi kademeli kaybeder, fazla kasıldığında ise akış daha erken kopar. *Auto-Trim* açıkken $\lvert\delta_s\rvert = \delta_{opt}$ alınır ve $\eta = 1$ olur.
+
+**Yapraklama sınırı.** Yukarıdaki dallar yalnızca bomun optimumdan ne kadar saptığına bakar. Yelkenin rüzgarı görüp görmediğini ise kirişin rüzgara **hücum açısı** belirler:
+
+$$\alpha = \theta - \lvert\delta_s\rvert, \qquad \eta \leftarrow \begin{cases} 0, & \alpha \le 0 \quad \text{(bom rüzgar yönünde: yelken rüzgara paralel, bayrak gibi yapraklar)}\\[1mm] \min\!\left(\eta,\ \dfrac{\alpha}{8°}\right), & 0 < \alpha < 8° \quad \text{(orsa yakası çırpar)} \end{cases}$$
+
+Örnek: $\psi = 055°$ ($\theta = 55°$), $\delta_s = 56°$ → $\alpha = -1°$. Bom pusulada $055° + 180° - 56° = 179°$'u, yani tam rüzgar altını gösterir. Yelken rüzgara paraleldir, $\eta = 0$ olur ve tekne ilerlemez. Sınır yalnızca bom optimumdan fazla boşlandığında devreye girer. Polar optimumu ±6° tolerans içinde her bantta $\alpha > 8°$'dir ($\theta > 30°$, $\delta_s \le 16° + 6°$), bu yüzden kalibre edilmiş trim değerleri ve auto-trim sonuçları değişmez. Bom en fazla 90° açılabildiğinden $\theta \ge 98°$ seyirlerde (geniş apaz, pupa) yelken boşlanarak yapraklatılamaz.
+
+Hücum açısı gerçek rüzgara göre hesaplanır. Tekne dururken görünür rüzgar gerçek rüzgara eşittir. Tekne ilerledikçe görünür rüzgar pruvaya kayar (AWA < θ), bu yüzden $\alpha \le 0$ yapraklamanın en hafif (gerekli) koşuludur (bkz. Bölüm 8).
 
 ![Kumaş yelken trim verimi](docs/figures/trim_efficiency.png)
 
@@ -586,6 +601,7 @@ Teknenin fiziksel parametreleri artık arayüzden değiştirilebilir. Simülasyo
 | Yaw ataleti yok (kinematik dönüş) | Manevralar gerçekte daha yavaş | $I_z\dot r = N_\delta\,\delta_r - N_r\,r$ |
 | Ölü açıda durgun tekne kurtulamaz | Uç durum 1 | Rüzgarla sürüklenme / backing modeli |
 | Rüzgar altı polar hız oranları iyimser | Kuvvet kontrolünde geniş apaz/pupada $C_N$ > 1.5 (Bölüm 3.1) | Poları görünür rüzgara göre yeniden kalibre etmek |
+| Yapraklama sınırı gerçek rüzgara göre ($\alpha = \theta - \lvert\delta_s\rvert$) | Kararlı hızda dar/tam apazda AWA (27°/41°, Bölüm 3.1) polar optimum bom açısından (32°/46°) küçüktür; görünür rüzgara göre yelken bu açılarda zaten yapraklama sınırında olurdu | $\delta_{opt}$'u görünür rüzgardan türetmek ($\delta_{opt} = \text{AWA} - \alpha_{opt}$) ve poları buna göre yeniden kalibre etmek |
 | Fiziksel parametreler arayüzden değiştirilebilir, ancak hız poları varsayılan tekneye (A_s = 20 m², k_g = 83.33 N·s/m) kalibredir ve λ ile ölçeklenir; gövde direnci doğrusaldır | Hız A_s/k_g ile doğru orantılı artar (gerçekte karesel dirençle ≈ √(A_s/k_g)); varsayılandan büyük sapmalarda hız fazla tahmin edilir | Poları ve direnci tekne ölçüleri / deney verisiyle yeniden kalibre etmek, karesel direnç |
 | ω_wh tam apazda kalibre edilip seyir bandından bağımsız alınır | Orsada (cot δs büyük) gerçek orsaya kaçma daha güçlüdür | ω_wh'yi δs ve hıza bağlamak |
 | Kinematik dönüş dümen stall'unu içermez | 20°'nin üzerinde dönüş hızı fazla tahmin edilir; dümen alanı dönüş hızını değil yalnızca kuvvet/momenti ve ω_wh'yi etkiler | Dümen kuvvetine dayalı yaw dinamiği |
@@ -630,3 +646,5 @@ Kanıtlar: [docs/results/legacy_bug_evidence.md](docs/results/legacy_bug_evidenc
 | H6 | İleri yön ataleti yoktu: ölü açıya giren tekne kilitleniyordu, tack imkânsızdı | Surge dinamiği ($\tau$ = 3 s) |
 | H7 | Yörünge etiketi son pruvayı başlangıç hızıyla gösteriyordu | "Son pruva / ortalama hız" |
 | H8 | Fizik kodu arayüzle iç içeydi (test edilemez) | `saildrone_model.py`, `navigation.py` ayrıldı |
+| H9 | Bom rüzgar yönüne kadar boşlansa da tekne ilerliyordu (ör. $\psi$ = 055°, $\delta_s$ = 56°: 30 s'de 41.7 m, orsaya kaçmayla pruva 045°'ye dönüyordu). Fazla açık dalın 0.10 tabanı yelkenin rüzgarı görüp görmediğine bakmıyordu | Hücum açısı $\alpha = \theta - \lvert\delta_s\rvert \le 0$ → $\eta = 0$; $0 < \alpha < 8°$ → $\eta \le \alpha/8°$ (Adım 3) |
+| H10 | Ölü açı yalnızca pruvaya göre sabit 330°–030° alınıyordu; bom açısı hesaba katılmıyordu | Ölü açı $\pm\max(30°, \lvert\delta_s\rvert)$ (Adım 1); arayüzdeki kama, etiketler ve seyir tipi bom açısıyla güncelleniyor |

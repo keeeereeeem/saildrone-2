@@ -22,7 +22,8 @@ import numpy as np
 # --- MODEL SABİTLERİ ---
 # L_HULL, RUDDER_DRAG, WEATHER_HELM_DPS ve TAU_SURGE varsayılan tekneye (Physics()) aittir;
 # kullanıcı parametreleriyle çalışan fonksiyonlar bunları phys argümanından türetir.
-NO_GO_DEG = 30.0            # Ölü açı yarı genişliği (TWA <= 30° -> itki yok)
+NO_GO_DEG = 30.0            # Teknenin ölü açı sınırı (TWA <= 30° -> itki yok); elle trimde bkz. dead_zone_deg
+LUFF_DEG = 8.0              # Yelkenin tam dolması için gereken asgari hücum açısı α = TWA − |bom| (°)
 L_HULL = 4.6                # Dönüş kinematiğinde kullanılan efektif gövde boyu (m)
 RUDDER_MAX_DEG = 35.0       # Dümen mekanik sınırı
 RUDDER_DRAG = 0.22          # Tam dümende hız kaybı oranı
@@ -56,7 +57,8 @@ POLAR = {
 TRIM = {
     "cloth": dict(tol=6.0, loss=0.05, under=(25.0, 1.6, 0.15), over=(30.0, 1.6, 0.10),
                   camber=(0.45, 0.18, 0.22), full="Tam Trim (Yelken Dolu / Torlu)",
-                  under_txt="Fazla Kasılı (Düz / Stall)", over_txt="Fazla Açık (Yapraklama)"),
+                  under_txt="Fazla Kasılı (Düz / Stall)", over_txt="Fazla Açık (Yapraklama)",
+                  luff_txt="Rüzgara Paralel (Tam Yapraklama – İtki Yok)"),
 }
 
 DESC = {
@@ -156,6 +158,17 @@ def leeward_sign(heading_deg):
     return 1.0 if h <= 180.0 else -1.0
 
 
+def dead_zone_deg(sail_deg=None):
+    """
+    Ölü açı yarı genişliği (°): rüzgar pruvaya bu açıdan dar gelirse yelken itki üretemez.
+    * NO_GO_DEG teknenin kendi sınırıdır: bom ne kadar kasılırsa kasılsın yelken kuvveti neredeyse tamamen
+      yana yönelir, ileri bileşeni direnci yenemez. Auto-trim'de (sail_deg None) ölü açı budur.
+    * Bom elle |δs| açılmışsa yelken TWA ≤ |δs|'de rüzgara paralel kalır ve yapraklar (α = TWA − |δs| ≤ 0),
+      bu yüzden ölü açı max(NO_GO_DEG, |δs|)'ye genişler.
+    """
+    return NO_GO_DEG if sail_deg is None else max(NO_GO_DEG, abs(float(sail_deg)))
+
+
 def band_index(twa):
     """TWA'nın düştüğü bant indeksi; ölü açıda None."""
     if twa <= NO_GO_DEG:
@@ -179,9 +192,11 @@ def signed_sail_angle(heading_deg, profile=PROFILE):
     return leeward_sign(heading_deg) * polar_point(heading_deg, profile)[0]
 
 
-def analyze_points_of_sail_360(heading_deg, profile_name=PROFILE_NAME):
+def analyze_points_of_sail_360(heading_deg, profile_name=PROFILE_NAME, sail_deg=None):
     """
     Seyir durumu analizi. Dönüş: (regime, opt_sail, speed_ratio, tack, wind_side, leeward_sign, desc)
+    sail_deg verilirse (elle trim) ölü açı bom açısına göre genişler (dead_zone_deg); auto-trim'de None.
+    Bom yüzünden ölü açıdaysa kontra ve rüzgar altı bordası korunur, opt_sail kasılması gereken açıdır.
     """
     profile = profile_key(profile_name)
     h = wrap360(heading_deg)
@@ -207,16 +222,28 @@ def analyze_points_of_sail_360(heading_deg, profile_name=PROFILE_NAME):
         regime = f"Sancak Kontra {name_tr} ({name_en})"
         tack = "Sancak Kontra"
         wind_side = "Sancak (Sağ)"
+    dz = dead_zone_deg(sail_deg)
+    if twa <= dz:
+        sail = abs(float(sail_deg))
+        return (NO_GO_REGIME, opt_sail, 0.0, tack, wind_side, lee,
+                f"Bom {sail:.0f}° açık, rüzgar pruvaya {twa:.0f}° geliyor: yelken rüzgara paralel kalır ve yapraklar "
+                f"(hücum açısı α = TWA − bom = {twa - sail:.0f}° ≤ 0), itki sıfırdır. Bu bom açısında ölü açı "
+                f"{360.0 - dz:03.0f}°–{dz:03.0f}° (±{dz:.0f}°) olur. Bomu {opt_sail:.0f}°'ye kasın.")
     return regime, opt_sail, ratio, tack, wind_side, lee, DESC[profile][i]
 
 
-def trim_efficiency(sail_deg, opt_deg, profile=PROFILE):
+def trim_efficiency(sail_deg, opt_deg, profile=PROFILE, twa=None):
     """
     Bom açısı ile optimum açı farkına göre aerodinamik trim verimi.
+    twa verilirse yelken kirişinin gerçek rüzgara hücum açısı α = TWA − |bom| de hesaba katılır:
+    bom rüzgar yönüne kadar boşlanınca (α ≤ 0) yelken rüzgara paralel kalır, bayrak gibi yapraklar
+    ve itki sıfırdır; 0 < α < LUFF_DEG aralığında orsa yakası çırpar, verim α / LUFF_DEG'i aşamaz.
     Dönüş: (eta, durum metni, rozet tipi, tor miktarı)
     """
     p = TRIM[profile]
     sail = abs(sail_deg)
+    if twa is not None and twa - sail <= 0.0:
+        return 0.0, p["luff_txt"], "badge-dead", 0.0
     d = abs(sail - opt_deg)
     if d <= p["tol"]:
         return 1.0 - (d / p["tol"]) * p["loss"], p["full"], "badge-full", p["camber"][0]
@@ -224,7 +251,11 @@ def trim_efficiency(sail_deg, opt_deg, profile=PROFILE):
         scale, expo, floor = p["under"]
         return max(floor, 1.0 - (d / scale) ** expo), p["under_txt"], "badge-warn", p["camber"][1]
     scale, expo, floor = p["over"]
-    return max(floor, 1.0 - (d / scale) ** expo), p["over_txt"], "badge-warn", p["camber"][2]
+    eta = max(floor, 1.0 - (d / scale) ** expo)
+    if twa is not None:
+        # α yalnızca bom boşlandıkça küçülür: polar optimumu ± tol içinde her bantta α > LUFF_DEG kalır
+        eta = min(eta, (twa - sail) / LUFF_DEG)
+    return eta, p["over_txt"], "badge-warn", p["camber"][2]
 
 
 def rudder_penalty(rudder_deg, phys=PHYS):
@@ -237,7 +268,7 @@ def target_speed(heading_deg, sail_deg, rudder_deg, profile, wind_ms, auto_trim=
     opt, ratio = polar_point(heading_deg, profile)
     if ratio == 0.0:
         return 0.0
-    eta = 1.0 if auto_trim else trim_efficiency(sail_deg, opt, profile)[0]
+    eta = 1.0 if auto_trim else trim_efficiency(sail_deg, opt, profile, true_wind_angle(heading_deg))[0]
     return wind_ms * ratio * eta * rudder_penalty(rudder_deg, phys) * phys.speed_scale
 
 
@@ -326,7 +357,7 @@ def force_moment_breakdown(heading_deg, sail_deg, rudder_deg, wind_ms, speed_ms=
     opt, ratio = polar_point(psi, profile)
     s = leeward_sign(psi)
     sail = opt if auto_trim else abs(sail_deg)
-    eta = 1.0 if (auto_trim or ratio == 0.0) else trim_efficiency(sail, opt, profile)[0]
+    eta = 1.0 if (auto_trim or ratio == 0.0) else trim_efficiency(sail, opt, profile, true_wind_angle(psi))[0]
     kappa = rudder_penalty(rudder_deg, phys)
     lam = phys.speed_scale
     v_star = wind_ms * ratio * eta * kappa * lam

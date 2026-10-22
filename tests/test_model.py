@@ -39,6 +39,70 @@ def test_trim_efficiency_peak_and_bounds(profile):
             assert 0.0 < eta <= 1.0
 
 
+@pytest.mark.parametrize("h,sail", [(55, 55), (55, 56), (55, 90), (305, 56), (305, -56), (40, 45), (85, 90)])
+def test_sail_eased_to_wind_direction_luffs(h, sail):
+    """Bom rüzgar yönüne kadar boşlanınca (TWA − bom ≤ 0) yelken rüzgara paraleldir: itki yok, tekne kıpırdamaz."""
+    eta, txt, badge, camber = m.trim_efficiency(sail, m.polar_point(h)[0], "cloth", m.true_wind_angle(h))
+    assert eta == 0.0 and badge == "badge-dead" and camber == 0.0
+    assert m.target_speed(h, sail, 0, "cloth", 8.0) == 0.0
+    r = m.simulate_open_loop(h, sail, 0, "cloth", 8.0, 30.0)
+    assert r["distance"] == 0.0 and r["final_heading"] == h
+    f = m.force_moment_breakdown(h, sail, 0, 8.0)
+    assert f["drive"] == 0.0 and f["side"] == 0.0
+
+
+def test_partial_luff_limits_efficiency():
+    """0 < α < LUFF_DEG: orsa yakası çırpar, verim α / LUFF_DEG ile sınırlı ve bom boşlandıkça düşer."""
+    twa, opt = 55.0, m.polar_point(55)[0]
+    etas = [m.trim_efficiency(s, opt, "cloth", twa)[0] for s in np.arange(twa - m.LUFF_DEG, twa + 0.01, 0.5)]
+    assert all(e <= (twa - s) / m.LUFF_DEG + 1e-12
+               for e, s in zip(etas, np.arange(twa - m.LUFF_DEG, twa + 0.01, 0.5)))
+    assert all(a >= b for a, b in zip(etas, etas[1:])) and etas[-1] == 0.0
+
+
+@pytest.mark.parametrize("twa", np.arange(30.5, 180.01, 0.5))
+def test_luff_limit_leaves_calibrated_trim_unchanged(twa):
+    """Polar optimumu ± tolerans içinde (ve fazla kasılı tarafta) yapraklama sınırı hiç devreye girmez."""
+    opt, tol = m.polar_point(twa)[0], m.TRIM["cloth"]["tol"]
+    for s in np.arange(0.0, min(opt + tol, 90.0) + 0.01, 0.5):
+        assert m.trim_efficiency(s, opt, "cloth", twa) == m.trim_efficiency(s, opt, "cloth")
+
+
+def test_downwind_sail_cannot_be_eased_into_luff():
+    """Bom en fazla 90° açılır: TWA ≥ 90° + LUFF_DEG seyirlerde yelken boşlayarak yapraklatılamaz."""
+    for twa in np.arange(90.0 + m.LUFF_DEG, 180.01, 1.0):
+        opt = m.polar_point(twa)[0]
+        assert m.trim_efficiency(90, opt, "cloth", twa) == m.trim_efficiency(90, opt, "cloth")
+
+
+def test_dead_zone_widens_with_boom_angle():
+    assert m.dead_zone_deg() == m.NO_GO_DEG                       # auto-trim: teknenin kendi sınırı
+    assert m.dead_zone_deg(0) == m.dead_zone_deg(22) == m.NO_GO_DEG
+    assert m.dead_zone_deg(56) == m.dead_zone_deg(-56) == 56.0
+    assert m.dead_zone_deg(90) == 90.0
+
+
+def test_dead_zone_matches_zero_thrust():
+    """Elle trimde tekne tam olarak ölü açının içindeyken (TWA ≤ max(30°, |bom|)) itkisiz kalır."""
+    for h in np.arange(0.0, 360.0, 1.0):
+        for sail in np.arange(0.0, 90.01, 2.0):
+            in_dead = m.true_wind_angle(h) <= m.dead_zone_deg(sail)
+            assert (m.target_speed(h, sail, 0, "cloth", 8.0) == 0.0) == in_dead
+            assert (m.analyze_points_of_sail_360(h, sail_deg=sail)[0] == m.NO_GO_REGIME) == in_dead
+
+
+@pytest.mark.parametrize("h,lee,tack", [(55, 1.0, "İskele Kontra"), (305, -1.0, "Sancak Kontra")])
+def test_boom_dead_zone_keeps_tack_and_trim_hint(h, lee, tack):
+    """Bom yüzünden ölü açıda: hız oranı 0, ama kontra / rüzgar altı bordası ve kasılacak optimum açı korunur."""
+    regime, opt, ratio, t, _, l, desc = m.analyze_points_of_sail_360(h, sail_deg=56)
+    assert regime == m.NO_GO_REGIME and ratio == 0.0
+    assert opt == 32.0 and t == tack and l == lee
+    assert "304°–056°" in desc
+    # aynı pruvada bom kasılınca ölü açıdan çıkar; auto-trim (sail_deg None) pruvaya göre değerlendirilir
+    assert m.analyze_points_of_sail_360(h, sail_deg=40)[0] != m.NO_GO_REGIME
+    assert m.analyze_points_of_sail_360(h)[0] != m.NO_GO_REGIME
+
+
 def test_rudder_penalty():
     assert m.rudder_penalty(0) == 1.0
     assert m.rudder_penalty(35) == pytest.approx(0.78)
@@ -59,8 +123,8 @@ def test_straight_run_distance_equals_speed_times_time(profile, h):
 
 def test_manual_trim_speed_matches_telemetry_formula():
     """Açık çevrimdeki hız ile anlık telemetri hızı aynı verim fonksiyonunu kullanmalı."""
-    for sail in [0, 20, 38, 42, 46, 60, 90]:
-        v_tel = 8.0 * 1.15 * m.trim_efficiency(sail, 46.0, "cloth")[0]
+    for sail in [0, 20, 38, 42, 46, 60, 85, 90]:
+        v_tel = 8.0 * 1.15 * m.trim_efficiency(sail, 46.0, "cloth", twa=90.0)[0]
         r = m.simulate_open_loop(90, sail, 0, "cloth", 8.0, 1.0, tau=0.0)
         assert r["v0"] == pytest.approx(v_tel)
 
