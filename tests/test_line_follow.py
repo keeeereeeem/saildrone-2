@@ -5,6 +5,7 @@ import pytest
 
 import line_follow as lf
 import saildrone_model as m
+from conftest import BOATS
 
 
 def end(bearing, length=600.0):
@@ -37,11 +38,13 @@ def test_holds_line_without_disturbance(bearing):
     assert np.max(np.abs(np.array([m.wrap180(p - bearing) for p in r.data["psi"]]))) < 0.5
 
 
-@pytest.mark.parametrize("bearing,expected", [(40, 4.0), (90, 1.1), (135, 0.53), (170, 0.16)])
-def test_leeway_angle_matches_point_of_sail_and_not_wind_speed(bearing, expected):
-    for wind in (3.0, 8.0, 15.0):
-        r = run(bearing, wind=wind)
-        assert r.metrics["max_leeway"] == pytest.approx(expected, abs=0.1)
+def test_leeway_largest_close_hauled_and_independent_of_wind():
+    """Yan kayma açısı orsada en büyük; kuvvetler hızın karesiyle ölçeklendiğinden rüzgar hızından bağımsızdır."""
+    lee = {b: [run(b, wind=w).metrics["max_leeway"] for w in (3.0, 8.0, 15.0)] for b in (40, 90, 170)}
+    assert lee[40][0] > lee[90][0] > lee[170][0]
+    for b in lee:
+        assert max(lee[b]) - min(lee[b]) < 0.15
+    assert 0.5 < lee[40][1] < 6.0                                 # orsada birkaç derece
 
 
 def test_leeway_is_compensated_by_crabbing():
@@ -49,7 +52,7 @@ def test_leeway_is_compensated_by_crabbing():
     r = run(60)
     d, half = r.data, len(r.data["t"]) // 2
     assert np.max(np.abs(d["e"][half:])) < 0.3
-    assert np.mean(d["psi"][half:]) < 60.0 - 1.0                # iskele kontra: pruva rüzgara (küçük açıya) döner
+    assert np.mean(d["psi"][half:]) < 60.0 - 0.5                # iskele kontra: pruva rüzgara (küçük açıya) döner
     assert np.mean(d["cog"][half:]) == pytest.approx(60.0, abs=0.3)
 
 
@@ -65,15 +68,13 @@ def test_port_starboard_mirror():
 @pytest.mark.parametrize("bearing", [60, 90, 135, 170, 250])
 @pytest.mark.parametrize("off,err", [(30.0, 0.0), (-30.0, 0.0), (0.0, 20.0), (0.0, -20.0)])
 def test_recovers_from_start_offset(wind, bearing, off, err):
-    if (bearing, off) == (60, 30.0) and wind < 8.0:
-        pytest.skip("orsaya yakın, rüzgar altında başlangıç: yalnızca yavaş dönüş beklenir (ayrı test)")
     r = run(bearing, wind=wind, start_offset=off, start_heading_err=err)
     mt = r.metrics
     assert r.status == "reached"
     assert mt["overshoot"] < 3.0
     assert mt["settle_time"] is not None
     assert mt["rms_e_second_half"] < 1.0
-    assert mt["max_abs_rudder"] <= m.RUDDER_MAX_DEG
+    assert mt["max_abs_rudder"] <= m.PHYS.rudder_stall_deg + 1e-9
 
 
 def test_close_hauled_leeward_start_returns_slowly_but_never_enters_dead_zone():
@@ -105,32 +106,45 @@ def test_allowed_dead_zone_line_starts_sailable_then_stops():
     assert m.true_wind_angle(r.data["psi"][-1]) <= m.NO_GO_DEG
 
 
-def test_rudder_rate_and_limit():
+def test_rudder_rate_and_stall_limit():
+    """Dümen servosu hız sınırlı; kontrolcü dümeni stall açısının ötesine götürmez (orada yalnızca fren olur)."""
     cfg = lf.LineConfig()
     r = run(90, start_heading_err=-45.0)
-    assert np.max(np.abs(np.diff(r.data["delta"]))) <= cfg.rudder_rate * cfg.dt + 1e-9
-    assert np.max(np.abs(r.data["delta"])) <= m.RUDDER_MAX_DEG + 1e-9
+    assert np.max(np.abs(np.diff(r.data["delta"]))) <= m.PHYS.rudder_rate * cfg.dt + 1e-9
+    assert np.max(np.abs(r.data["delta"])) == pytest.approx(m.PHYS.rudder_stall_deg)
 
 
-def test_force_based_weather_helm_matches_model_calibration():
-    """Yelken yan kuvvetinden hesaplanan orsaya kaçma, tam apazda modelin 0.35 °/s kalibrasyonuyla aynı mertebede."""
-    f = m.force_moment_breakdown(90, 0, 0, 8.0, auto_trim=True)
-    r_sail = lf.sail_yaw_rate(f["side"], 1.0, f["v"])
-    assert r_sail == pytest.approx(-m.WEATHER_HELM_DPS, rel=0.1)
-    assert lf.holding_rudder(r_sail, f["v"]) == pytest.approx(f["rudder_balance"], rel=0.1)
+def test_same_dynamics_as_shared_step():
+    """Düz rota simülasyonu, kayıtlı komutlarla diğer sekmelerin adım fonksiyonunu adım adım tekrarlar."""
+    cfg = lf.LineConfig(start_offset=20.0)
+    r = lf.simulate_line((0.0, 0.0), end(70), 8.0, cfg)
+    d = r.data
+    s = m.BoatState(d["x"][0], d["y"][0], d["psi"][0], d["v"][0], d["r"][0], d["delta"][0])
+    for k in range(200):
+        s = m.step(s, abs(d["sail"][k]), d["delta_cmd"][k], 8.0, dt=cfg.dt)
+        assert (s.x, s.y, s.psi, s.v) == pytest.approx((d["x"][k + 1], d["y"][k + 1], d["psi"][k + 1], d["v"][k + 1]))
 
 
 @pytest.mark.parametrize("heading", [40, 60, 90, 135, 170])
-def test_sail_forces_match_force_breakdown(heading):
-    f = m.force_moment_breakdown(heading, 0, 0, 8.0, auto_trim=True)
-    _, sail, eta, ratio, _, _ = lf.sail_state(heading, 0.0)
-    drive, side = lf.sail_forces(8.0, ratio, eta, sail)
-    assert drive == pytest.approx(f["drive"]) and side == pytest.approx(f["side"])
+def test_recorded_forces_match_force_breakdown(heading):
+    r = lf.simulate_line((0.0, 0.0), end(heading), 8.0, lf.LineConfig(feedforward=False))
+    d = r.data
+    f = m.force_moment_breakdown(heading, 0, d["delta"][0], 8.0, speed_ms=d["v"][0], auto_trim=True)
+    assert d["drive"][0] == pytest.approx(f["drive"]) and d["side"][0] == pytest.approx(f["side"])
+    assert d["heel_factor"][0] == pytest.approx(f["heel_factor"])
+    assert d["leeway_angle"][0] == pytest.approx(f["leeway"])
+
+
+def test_feedforward_uses_holding_rudder():
+    r = run(90)
+    d = r.data
+    assert d["ff_hdg"][0] == pytest.approx(m.holding_rudder(d["side"][0], 1.0, d["v"][0]))
+    assert d["ff_hdg"][0] > 0.0                                       # iskele kontrada orsaya kaçmayı dengeler
 
 
 def test_depower_only_when_weather_helm_beats_rudder():
     assert run(90, start_heading_err=-45.0).metrics["depower_time"] == 0.0     # dümen yetiyor: yelken dolu
-    strong = m.Physics(ce_arm=1.5)                                             # güçlü orsaya kaçma, hafif rüzgar
+    strong = m.Physics(ce_arm=2.0)                                             # güçlü orsaya kaçma (denge dümeni ≈ 14°)
     on = run(60, wind=3.0, phys=strong, start_heading_err=-10.0)
     off = run(60, wind=3.0, phys=strong, start_heading_err=-10.0, depower=False)
     assert on.metrics["depower_time"] > 0.0
@@ -141,3 +155,27 @@ def test_low_wind_turn_toward_wind_does_not_wind_up_into_irons():
     r = run(40, wind=3.0, start_heading_err=20.0)
     assert r.status == "reached"
     assert np.min(r.data["twa"]) >= m.NO_GO_DEG
+
+
+def test_strong_wind_heel_limit_reported():
+    """Boyutlandırma aşaması seçeneği: devrilme sınırı açıkken yelken azaltılır ve kayda geçer."""
+    heel = m.Physics(heel_limit=True)
+    r = run(90, wind=15.0, phys=heel)
+    assert r.status == "reached"
+    assert r.metrics["min_heel_factor"] < 1.0
+    assert np.all(np.abs(r.data["side"]) <= heel.side_force_max + 1e-9)
+    assert run(90, wind=15.0).metrics["min_heel_factor"] == 1.0           # varsayılan: kapalı
+
+
+@pytest.mark.parametrize("boat", BOATS)
+def test_line_follow_any_boat_size_and_mass(boat):
+    """Tekne ölçüleri henüz belli değil: kontrolcü her boyutta ve kütlede çizgiyi tutmalı."""
+    phys = BOATS[boat]
+    for brg, wind, off, err in [(45, 8.0, 30.0, 0.0), (60, 3.0, 30.0, 25.0), (90, 15.0, -30.0, 0.0),
+                                (150, 8.0, -30.0, 20.0), (250, 15.0, 30.0, -20.0)]:
+        r = run(brg, wind=wind, phys=phys, start_offset=off, start_heading_err=err)
+        mt = r.metrics
+        assert r.status == "reached", (boat, brg, wind)
+        assert mt["overshoot"] < 0.5 * phys.hull_length + 1.0
+        assert mt["rms_e_second_half"] < 0.5
+        assert mt["rudder_travel"] < 400.0                               # dümen titreşimi yok

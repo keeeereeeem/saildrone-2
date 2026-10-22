@@ -12,25 +12,25 @@
 ## H3 – Gösterilen hız ile gidilen yol tutarsızlığı (dümen 0, 30 s, 8 m/s)
 | Profil | psi | Bom | Eski V (m/s) | Eski yol/30 s (m/s) | Fark % | Yeni V | Yeni yol/30 s |
 |---|---|---|---|---|---|---|---|
-| cloth | 90 | 36 | 7.08 | 7.71 | +9.0 | 7.08 | 7.06 |
-| cloth | 90 | 51 | 8.82 | 8.56 | -2.9 | 8.82 | 8.60 |
-| cloth | 90 | 71 | 2.33 | 1.65 | -29.1 | 2.33 | 2.26 |
-| cloth | 135 | 55 | 5.66 | 6.21 | +9.6 | 5.66 | 5.66 |
-| cloth | 135 | 70 | 7.05 | 7.03 | -0.3 | 7.05 | 7.05 |
-| cloth | 135 | 90 | 1.86 | 1.36 | -27.1 | 1.86 | 1.86 |
+| cloth | 90 | 14 | 1.38 | 0.86 | -37.5 | 6.07 | 7.12 |
+| cloth | 90 | 29 | 4.29 | 5.55 | +29.3 | 7.67 | 7.40 |
+| cloth | 90 | 49 | 8.96 | 8.81 | -1.6 | 5.50 | 5.16 |
+| cloth | 135 | 60 | 7.04 | 7.01 | -0.5 | 4.98 | 5.08 |
+| cloth | 135 | 75 | 6.12 | 6.24 | +1.9 | 5.11 | 5.11 |
+| cloth | 135 | 90 | 1.86 | 1.36 | -27.1 | 4.51 | 4.53 |
 
-En kötü fark (eski): 46.7 %
+En kötü fark (eski): 47.2 %
 
 ## H4 – Auto-trim dönüş sırasında yeniden trim yapmıyor (psi0=60°, dümen +20°, 20 s, 8 m/s)
-- Eski: yol=24.2 m (bom başlangıç açısında donmuş) | Yeni: yol=63.5 m (her adımda optimum)
+- Eski: yol=24.2 m (bom başlangıç açısında donmuş) | Yeni: yol=78.0 m (her adımda optimum)
 
 ## H5 – Orsaya kaçma (weather helm) süreksizliği (psi0=90°, 60 s, 8 m/s)
-- dümen=+0.0°: eski son pruva=69.0° | yeni son pruva=69.0°
-- dümen=+1.9°: eski son pruva=150.2° | yeni son pruva=152.4°
-- dümen=+2.0°: eski son pruva=157.3° | yeni son pruva=153.1°
+- dümen=+0.0°: eski son pruva=69.0° | yeni son pruva=60.6°
+- dümen=+1.9°: eski son pruva=150.2° | yeni son pruva=286.2°
+- dümen=+2.0°: eski son pruva=157.3° | yeni son pruva=302.6°
 
 ## H6 – Atalet yok: ölü açıdan geçiş (tack) imkânsız (psi0=40°, dümen -35°, 30 s)
-- U= 3.0 m/s: eski son pruva=29.6° (ölü açıda kilit) | yeni son pruva=3.9°, ölü açıda kaldı
-- U= 5.0 m/s: eski son pruva=27.0° (ölü açıda kilit) | yeni son pruva=341.5°, ölü açıda kaldı
-- U= 8.0 m/s: eski son pruva=26.2° (ölü açıda kilit) | yeni son pruva=286.4°, ölü açıyı geçti
-- U=12.0 m/s: eski son pruva=29.6° (ölü açıda kilit) | yeni son pruva=97.7°, ölü açıyı geçti
+- U= 3.0 m/s: eski son pruva=29.6° (ölü açıda kilit) | yeni son pruva=331.0°, ölü açıda kaldı
+- U= 5.0 m/s: eski son pruva=27.0° (ölü açıda kilit) | yeni son pruva=108.0°, ölü açıyı geçti
+- U= 8.0 m/s: eski son pruva=26.2° (ölü açıda kilit) | yeni son pruva=204.3°, ölü açıyı geçti
+- U=12.0 m/s: eski son pruva=29.6° (ölü açıda kilit) | yeni son pruva=220.1°, ölü açıyı geçti

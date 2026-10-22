@@ -1,25 +1,31 @@
-profil,ruzgar,senaryo,ulasti,sure_s,yol_m,duz_mesafe_m,rota_verimi,ort_vmg,tack,gybe,sonuc
-Kumaş Yelken,1.0,S1 Tam apaz (Doğu),EVET,861.2,990.1,1000.0,1.01,1.16,0,0,Hedefe ulaşıldı
-Kumaş Yelken,1.0,S2 Rüzgar altı (Güney),EVET,1356.8,1077.7,1000.0,0.928,0.74,0,1,Hedefe ulaşıldı
-Kumaş Yelken,1.0,S3 Kuzeydoğu 45°,EVET,1667.8,1405.9,989.9,0.704,0.59,0,2,Hedefe ulaşıldı
-Kumaş Yelken,1.0,S4 Tam rüzgar üstü (Kuzey),EVET,2419.2,1849.0,1000.0,0.541,0.41,0,2,Hedefe ulaşıldı
-Kumaş Yelken,1.0,S5 Ölü açı içi (017°),EVET,2311.8,1804.2,1044.0,0.579,0.45,0,2,Hedefe ulaşıldı
-Kumaş Yelken,1.0,S6 Ofset başlangıç (KB),EVET,2419.2,1985.0,1421.3,0.716,0.59,0,2,Hedefe ulaşıldı
-Kumaş Yelken,3.0,S1 Tam apaz (Doğu),EVET,287.0,990.1,1000.0,1.01,3.48,0,0,Hedefe ulaşıldı
-Kumaş Yelken,3.0,S2 Rüzgar altı (Güney),EVET,453.0,1079.9,1000.0,0.926,2.21,0,1,Hedefe ulaşıldı
-Kumaş Yelken,3.0,S3 Kuzeydoğu 45°,EVET,558.8,1420.9,989.9,0.697,1.77,0,2,Hedefe ulaşıldı
-Kumaş Yelken,3.0,S4 Tam rüzgar üstü (Kuzey),EVET,808.5,1861.2,1000.0,0.537,1.24,0,2,Hedefe ulaşıldı
-Kumaş Yelken,3.0,S5 Ölü açı içi (017°),EVET,772.0,1813.5,1044.0,0.576,1.35,0,2,Hedefe ulaşıldı
-Kumaş Yelken,3.0,S6 Ofset başlangıç (KB),EVET,808.8,1998.9,1421.3,0.711,1.76,0,2,Hedefe ulaşıldı
-Kumaş Yelken,8.0,S1 Tam apaz (Doğu),EVET,107.8,991.3,1000.0,1.009,9.28,0,0,Hedefe ulaşıldı
-Kumaş Yelken,8.0,S2 Rüzgar altı (Güney),EVET,171.2,1087.2,1000.0,0.92,5.84,0,1,Hedefe ulaşıldı
-Kumaş Yelken,8.0,S3 Kuzeydoğu 45°,EVET,197.5,1291.7,989.9,0.766,5.01,3,0,Hedefe ulaşıldı
-Kumaş Yelken,8.0,S4 Tam rüzgar üstü (Kuzey),EVET,258.5,1479.7,1000.0,0.676,3.87,4,0,Hedefe ulaşıldı
-Kumaş Yelken,8.0,S5 Ölü açı içi (017°),EVET,267.8,1568.5,1044.0,0.666,3.9,4,0,Hedefe ulaşıldı
-Kumaş Yelken,8.0,S6 Ofset başlangıç (KB),EVET,287.5,1835.8,1421.3,0.774,4.94,3,0,Hedefe ulaşıldı
-Kumaş Yelken,15.0,S1 Tam apaz (Doğu),EVET,57.5,991.9,1000.0,1.008,17.39,0,0,Hedefe ulaşıldı
-Kumaş Yelken,15.0,S2 Rüzgar altı (Güney),EVET,92.2,1096.7,1000.0,0.912,10.84,0,1,Hedefe ulaşıldı
-Kumaş Yelken,15.0,S3 Kuzeydoğu 45°,EVET,112.8,1336.5,989.9,0.741,8.78,3,0,Hedefe ulaşıldı
-Kumaş Yelken,15.0,S4 Tam rüzgar üstü (Kuzey),EVET,163.2,1707.6,1000.0,0.586,6.13,5,1,Hedefe ulaşıldı
-Kumaş Yelken,15.0,S5 Ölü açı içi (017°),EVET,143.8,1549.1,1044.0,0.674,7.26,3,0,Hedefe ulaşıldı
-Kumaş Yelken,15.0,S6 Ofset başlangıç (KB),EVET,160.2,1880.2,1421.3,0.756,8.87,3,0,Hedefe ulaşıldı
+ruzgar,senaryo,ulasti,sure_s,yol_m,duz_mesafe_m,rota_verimi,ort_vmg,tack,gybe,sonuc
+1.0,S1 Tam apaz (Doğu),EVET,1009.8,990.2,1000.0,1.01,0.99,0,0,Hedefe ulaşıldı
+1.0,S2 Rüzgar altı (Güney),EVET,2130.8,991.7,1000.0,1.008,0.47,0,0,Hedefe ulaşıldı
+1.0,S3 Kuzeydoğu 45°,EVET,1291.8,980.0,989.9,1.01,0.77,0,0,Hedefe ulaşıldı
+1.0,S4 Tam rüzgar üstü (Kuzey),EVET,2308.5,1631.0,1000.0,0.613,0.43,0,4,Hedefe ulaşıldı
+1.0,S5 Ölü açı içi (017°),EVET,2196.2,1604.1,1044.0,0.651,0.48,0,3,Hedefe ulaşıldı
+1.0,S6 Ofset başlangıç (KB),EVET,2098.0,1411.4,1421.3,1.007,0.68,0,0,Hedefe ulaşıldı
+3.0,S1 Tam apaz (Doğu),EVET,336.5,990.2,1000.0,1.01,2.97,0,0,Hedefe ulaşıldı
+3.0,S2 Rüzgar altı (Güney),EVET,710.0,991.9,1000.0,1.008,1.41,0,0,Hedefe ulaşıldı
+3.0,S3 Kuzeydoğu 45°,EVET,430.8,980.4,989.9,1.01,2.3,0,0,Hedefe ulaşıldı
+3.0,S4 Tam rüzgar üstü (Kuzey),EVET,702.2,1498.6,1000.0,0.667,1.42,0,2,Hedefe ulaşıldı
+3.0,S5 Ölü açı içi (017°),EVET,704.5,1499.7,1044.0,0.696,1.48,1,2,Hedefe ulaşıldı
+3.0,S6 Ofset başlangıç (KB),EVET,699.2,1411.6,1421.3,1.007,2.03,0,0,Hedefe ulaşıldı
+8.0,S1 Tam apaz (Doğu),EVET,126.2,990.7,1000.0,1.009,7.92,0,0,Hedefe ulaşıldı
+8.0,S2 Rüzgar altı (Güney),EVET,266.2,992.2,1000.0,1.008,3.76,0,0,Hedefe ulaşıldı
+8.0,S3 Kuzeydoğu 45°,EVET,161.5,980.2,989.9,1.01,6.13,0,0,Hedefe ulaşıldı
+8.0,S4 Tam rüzgar üstü (Kuzey),EVET,256.5,1382.8,1000.0,0.723,3.9,1,1,Hedefe ulaşıldı
+8.0,S5 Ölü açı içi (017°),EVET,263.5,1576.9,1044.0,0.662,3.96,2,1,Hedefe ulaşıldı
+8.0,S6 Ofset başlangıç (KB),EVET,262.2,1411.8,1421.3,1.007,5.42,0,0,Hedefe ulaşıldı
+15.0,S1 Tam apaz (Doğu),EVET,67.5,993.1,1000.0,1.007,14.81,0,0,Hedefe ulaşıldı
+15.0,S2 Rüzgar altı (Güney),EVET,142.0,992.4,1000.0,1.008,7.04,0,0,Hedefe ulaşıldı
+15.0,S3 Kuzeydoğu 45°,EVET,86.2,981.6,989.9,1.009,11.48,0,0,Hedefe ulaşıldı
+15.0,S4 Tam rüzgar üstü (Kuzey),EVET,138.5,1437.6,1000.0,0.696,7.22,0,1,Hedefe ulaşıldı
+15.0,S5 Ölü açı içi (017°),EVET,149.2,1562.5,1044.0,0.668,7.0,2,1,Hedefe ulaşıldı
+15.0,S6 Ofset başlangıç (KB),EVET,140.0,1413.1,1421.3,1.006,10.15,0,0,Hedefe ulaşıldı
+20.0,S1 Tam apaz (Doğu),EVET,50.5,990.7,1000.0,1.009,19.8,0,0,Hedefe ulaşıldı
+20.0,S2 Rüzgar altı (Güney),EVET,106.5,992.5,1000.0,1.008,9.39,0,0,Hedefe ulaşıldı
+20.0,S3 Kuzeydoğu 45°,EVET,64.8,982.5,989.9,1.008,15.29,0,0,Hedefe ulaşıldı
+20.0,S4 Tam rüzgar üstü (Kuzey),EVET,107.0,1496.7,1000.0,0.668,9.35,0,1,Hedefe ulaşıldı
+20.0,S5 Ölü açı içi (017°),EVET,110.2,1592.7,1044.0,0.656,9.47,1,1,Hedefe ulaşıldı
+20.0,S6 Ofset başlangıç (KB),EVET,105.0,1413.1,1421.3,1.006,13.54,0,0,Hedefe ulaşıldı

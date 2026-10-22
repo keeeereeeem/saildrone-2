@@ -187,7 +187,8 @@ function idxAt(t) {
   return lo;
 }
 const LIN = ["x", "y", "v", "e", "delta", "delta_cmd", "depower", "v_lat", "leeway_angle", "p_xte", "i_xte", "d_xte",
-  "p_hdg", "i_hdg", "d_hdg", "ff_hdg", "crab", "drive", "side", "hull_drag", "rudder_force", "rudder_moment", "sail_moment", "twa", "r"];
+  "p_hdg", "i_hdg", "d_hdg", "ff_hdg", "crab", "drive", "side", "hull_drag", "induced_drag", "rudder_drag", "rudder_force",
+  "rudder_moment", "sail_moment", "heel_factor", "twa", "r"];
 const ANG = ["psi", "psi_des", "cog"];
 function sampleAt(t) {
   const d = S.data, n = d.t.length, i = idxAt(t), j = Math.min(i + 1, n - 1);
@@ -439,13 +440,14 @@ function drawForces(cur) {
   drawCatamaran(c, cx, cy, k, 0, cur.sail, cur.delta);
   const s = Math.sign(cur.sail) || 0;
   // tüm kuvvetler aynı ölçekte; dümen kuvveti dönüşte diğerlerini aşabileceğinden ok boyu sınırlanır
-  const fmax = Math.max(1, cur.drive, cur.side, cur.hull_drag), sc = 72 / fmax;
+  const res = cur.hull_drag + (cur.induced_drag || 0) + (cur.rudder_drag || 0);   // su direnci R + R_i + D_d
+  const fmax = Math.max(1, cur.drive, cur.side, res), sc = 72 / fmax;
   const L = (f) => Math.sign(f) * Math.min(95, Math.abs(f) * sc);
   const ce = [cx, cy - 0.2 * k], st = [cx, cy + 2.1 * k];
   arrow(c, ce[0], ce[1], ce[0], ce[1] - L(cur.drive), "#7c3aed", 2.6);
   arrow(c, ce[0], ce[1], ce[0] + s * L(cur.side), ce[1], "#7c3aed", 2.2, [5, 3]);
   arrow(c, cx, cy + 0.6 * k, cx - s * L(cur.side), cy + 0.6 * k, "#64748b", 2.2, [5, 3]);
-  arrow(c, cx, cy + 1.4 * k, cx, cy + 1.4 * k + L(cur.hull_drag), "#64748b", 2.6);
+  arrow(c, cx, cy + 1.4 * k, cx, cy + 1.4 * k + L(res), "#64748b", 2.6);
   arrow(c, st[0], st[1], st[0] - L(cur.rudder_force), st[1], "#dc2626", 2.6);
   // net dönme momenti yayı
   const nm = cur.rudder_moment + cur.sail_moment;
@@ -457,10 +459,11 @@ function drawForces(cur) {
     arrow(c, tx + sg * 8 * Math.sin(ae), ty - sg * 8 * Math.cos(ae), tx, ty, "#0f766e", 1.8);
   }
   const rows = [
-    ["#7c3aed", "Yelken itkisi T", cur.drive.toFixed(0) + " N"],
-    ["#7c3aed", "Yan kuvvet F_yan (rüzgar altına)", cur.side.toFixed(0) + " N"],
-    ["#64748b", "Yanal direnç (salma + gövde)", cur.side.toFixed(0) + " N"],
-    ["#64748b", "Gövde direnci R", cur.hull_drag.toFixed(0) + " N"],
+    ["#7c3aed", "Yelken itkisi X", cur.drive.toFixed(1) + " N"],
+    ["#7c3aed", "Yan kuvvet Y (rüzgar altına)" + (cur.heel_factor < 0.995 ? " · yelken %" + Math.round(100 * cur.heel_factor) : ""),
+     cur.side.toFixed(1) + " N"],
+    ["#64748b", "Yanal direnç (hançer + gövde)", cur.side.toFixed(1) + " N"],
+    ["#64748b", "Su direnci R + R_i + D_d", res.toFixed(1) + " N"],
     ["#dc2626", "Dümen kuvveti Y_d (+ iskeleye)", fmtS(cur.rudder_force, 0) + " N"],
     ["#0f766e", "Net moment N_d + N_y (+ sancağa)", fmtS(nm, 0) + " N·m"],
   ];

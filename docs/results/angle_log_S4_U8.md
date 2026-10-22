@@ -1,10 +1,7 @@
-| # | Zaman (s) | Bacak | Olay | ψ* (°) | TWA (°) | Seyir | Kontra | δ_s (°) | δ_r manevra (°) | δ_r seyir (°) | Ort. hız (m/s) |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 0–22 | B→H | Başlangıç | 50.5 | 50.5 | Dar Apaz | İskele | +32 | +0.0 | +0.2 | 6.80 |
-| 2 | 22–50 | B→H | Rota düzeltme | 35.5 | 35.5 | Orsa | İskele | +16 | -4.8 | +0.2 | 5.16 |
-| 3 | 50–109 | B→H | Tack | 309.5 | 50.5 | Dar Apaz | Sancak | -32 | -35.0 | -0.4 | 6.14 |
-| 4 | 109–153 | B→H | Rota düzeltme | 324.5 | 35.5 | Orsa | Sancak | -16 | +4.8 | -0.2 | 5.09 |
-| 5 | 153–203 | B→H | Tack | 50.5 | 50.5 | Dar Apaz | İskele | +32 | +35.0 | +0.4 | 6.02 |
-| 6 | 203–229 | B→H | Rota düzeltme | 35.5 | 35.5 | Orsa | İskele | +16 | -4.8 | +0.1 | 5.18 |
-| 7 | 229–245 | B→H | Tack | 279.5 | 80.5 | Tam Apaz | Sancak | -46 | -35.0 | -0.7 | 5.32 |
-| 8 | 245–258 | B→H | Rota düzeltme | 309.5 | 50.5 | Dar Apaz | Sancak | -32 | +7.9 | +16.7 | 5.85 |
+| # | Zaman (s) | Bacak | Olay | ψ* (°) | TWA (°) | Seyir | Kontra | δs (°) | δr manevra (°) | δr seyir (°) | Ort. hız (m/s) | λ (°) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 0–115 | B→H | Başlangıç | 43.0 | 43.0 | Orsa | İskele | +6 | +0.0 | +0.5 | 5.51 | 2.3 |
+| 2 | 115–230 | B→H | Gybe | 324.0 | 36.0 | Orsa | Sancak | -6 | +19.7 | -0.6 | 5.22 | 2.5 |
+| 3 | 230–241 | B→H | Rota düzeltme | 300.5 | 59.5 | Dar Apaz | Sancak | -11 | -6.4 | -0.2 | 6.60 | 1.6 |
+| 4 | 241–249 | B→H | Rota düzeltme | 311.0 | 49.0 | Orsa | Sancak | -8 | +0.3 | +2.6 | 6.37 | 1.9 |
+| 5 | 249–256 | B→H | Tack | 54.2 | 54.2 | Dar Apaz | İskele | +18 | +19.7 | -0.5 | 3.29 | 2.7 |

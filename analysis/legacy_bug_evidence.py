@@ -1,6 +1,7 @@
 """
 Orijinal app.py'deki (legacy/app_original.py) mantık hatalarını sayısal olarak gösterir
-ve düzeltilmiş modelle (saildrone_model.py) karşılaştırır.
+ve güncel kuvvet tabanlı modelle (saildrone_model.py, 50 kg referans tekne) karşılaştırır. Eski kod 250 kg'lık
+farklı bir tekneyi temsil ettiğinden hız değerleri doğrudan karşılaştırılamaz; tablolar hataların niteliğini gösterir.
 
 Çalıştırma:  python analysis/legacy_bug_evidence.py
 """
@@ -60,14 +61,14 @@ def main(out=sys.stdout):
     worst = 0.0
     for prof, key in ((PC, "cloth"),):
         for h in (90, 135):
-            opt = m.polar_point(h, key)[0]
+            opt = m.polar(h, 8.0)[1]
             for ds in (-30, -10, -5, 5, 10, 25):
                 sail = max(0, min(90, opt + ds))
                 tel = legacy_run(sim, heading_deg=h, sail_input_deg=sail, rudder_deg=0, profile_name=prof,
                                  wind_speed_ms=8.0, sim_time_s=30.0)
                 v_avg = tel["distance_m"] / 30.0
                 diff = 100 * (v_avg - tel["speed_ms"]) / max(tel["speed_ms"], 1e-9)
-                new = m.simulate_open_loop(h, sail, 0, key, 8.0, 30.0, tau=0.0)
+                new = m.simulate_open_loop(h, sail, 0, 8.0, 30.0)
                 worst = max(worst, abs(diff))
                 if ds in (-10, 5, 25):
                     p(f"| {key} | {h} | {sail:.0f} | {tel['speed_ms']:.2f} | {v_avg:.2f} | {diff:+.1f} | "
@@ -77,21 +78,21 @@ def main(out=sys.stdout):
     p("\n## H4 – Auto-trim dönüş sırasında yeniden trim yapmıyor (psi0=60°, dümen +20°, 20 s, 8 m/s)")
     tel = legacy_run(sim, heading_deg=60, sail_input_deg=0, rudder_deg=20, profile_name=PC,
                      wind_speed_ms=8.0, sim_time_s=20.0, auto_trim=True)
-    new = m.simulate_open_loop(60, 0, 20, "cloth", 8.0, 20.0, auto_trim=True, tau=0.0)
+    new = m.simulate_open_loop(60, 0, 20, 8.0, 20.0, auto_trim=True)
     p(f"- Eski: yol={tel['distance_m']:.1f} m (bom başlangıç açısında donmuş) | Yeni: yol={new['distance']:.1f} m (her adımda optimum)")
 
     p("\n## H5 – Orsaya kaçma (weather helm) süreksizliği (psi0=90°, 60 s, 8 m/s)")
     for rud in (0.0, 1.9, 2.0):
         tel = legacy_run(sim, heading_deg=90, sail_input_deg=46, rudder_deg=rud, profile_name=PC,
                          wind_speed_ms=8.0, sim_time_s=60.0)
-        new = m.simulate_open_loop(90, 46, rud, "cloth", 8.0, 60.0)
+        new = m.simulate_open_loop(90, 33, rud, 8.0, 60.0)
         p(f"- dümen={rud:+.1f}°: eski son pruva={tel['final_cog_deg']:.1f}° | yeni son pruva={new['final_heading']:.1f}°")
 
     p("\n## H6 – Atalet yok: ölü açıdan geçiş (tack) imkânsız (psi0=40°, dümen -35°, 30 s)")
     for U in (3.0, 5.0, 8.0, 12.0):
         tel = legacy_run(sim, heading_deg=40, sail_input_deg=16, rudder_deg=-35, profile_name=PC,
                          wind_speed_ms=U, sim_time_s=30.0)
-        new = m.simulate_open_loop(40, 12, -35, "cloth", U, 30.0, auto_trim=True)
+        new = m.simulate_open_loop(40, 12, -35, U, 30.0, auto_trim=True)
         stuck_new = m.true_wind_angle(new["final_heading"]) <= m.NO_GO_DEG and new["v"][-1] < 0.05
         p(f"- U={U:4.1f} m/s: eski son pruva={tel['final_cog_deg']:.1f}° (ölü açıda kilit) | "
           f"yeni son pruva={new['final_heading']:.1f}°, "
